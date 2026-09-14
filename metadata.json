@@ -1,0 +1,6 @@
+{
+  "name": "WhatsApp Manager",
+  "description": "Production-ready Node.js backend using Baileys to manage WhatsApp sessions, with Firestore cost optimizations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
