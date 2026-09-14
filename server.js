@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { startSession, getSessionStatus, logoutSession } from './whatsappManager.js';
+import { startSession, getSessionStatus, logoutSession, sendWhatsAppMessage } from './whatsappManager.js';
 import { getUserRole, getAllUsers, createUser, resetUserPassword, deleteUser } from './firestoreService.js';
 
 const app = express();
@@ -152,6 +152,20 @@ app.post('/api/sessions/logout', requireAuth, async (req, res) => {
   } catch (error) {
     console.error(`[LogoutSession] Error for user ${userId}:`, error);
     res.status(500).json({ error: 'Failed to logout session' });
+  }
+});
+
+app.post('/api/send-message', requireAuth, async (req, res) => {
+  try {
+    const { to, message } = req.body;
+    if (!to || !message) {
+      return res.status(400).json({ error: 'Missing to or message' });
+    }
+    const result = await sendWhatsAppMessage(req.userId, to, message);
+    res.json(result);
+  } catch (error) {
+    console.error(`[SendMessage] Error for user ${req.userId}:`, error.message);
+    res.status(500).json({ error: error.message || 'Failed to send message' });
   }
 });
 

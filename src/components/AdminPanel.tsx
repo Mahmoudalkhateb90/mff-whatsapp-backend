@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
 import { auth } from '../firebase';
 import { API_BASE_URL } from '../config';
-import { Users, UserPlus, Key, Loader2, ShieldCheck, Trash2 } from 'lucide-react';
+import { Users, UserPlus, Key, Loader2, ShieldCheck, Trash2, Eye, EyeOff } from 'lucide-react';
+import { useLanguage } from '../context/LanguageContext';
 
 interface User {
   id: string;
@@ -14,6 +15,7 @@ interface User {
 }
 
 export default function AdminPanel() {
+  const { t } = useLanguage();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -24,15 +26,25 @@ export default function AdminPanel() {
   const [newRole, setNewRole] = useState('Agent');
   const [newDepartment, setNewDepartment] = useState('');
   const [creating, setCreating] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
 
   // Reset Password Modal
   const [resettingUser, setResettingUser] = useState<User | null>(null);
   const [resetPassword, setResetPassword] = useState('');
+  const [showResetPassword, setShowResetPassword] = useState(false);
+
+  const getAuthHeaders = () => {
+    return {
+      'x-user-id': auth.currentUser?.uid || auth.currentUser?.email || '',
+      'x-user-email': auth.currentUser?.email || '',
+      'x-user-role': auth.currentUser?.email === 'mahmoud.alkhateeb@money.jo' ? 'Super Admin' : ''
+    };
+  };
 
   const fetchUsers = async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/api/users`, {
-        headers: { 'x-user-id': auth.currentUser?.uid || '' }
+        headers: { ...getAuthHeaders() }
       });
       if (res.ok) {
         const data = await res.json();
@@ -57,7 +69,7 @@ export default function AdminPanel() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': auth.currentUser?.uid || ''
+          ...getAuthHeaders()
         },
         body: JSON.stringify({ email: newEmail, password: newPassword, displayName: newName, role: newRole, department: newDepartment })
       });
@@ -87,7 +99,7 @@ export default function AdminPanel() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': auth.currentUser?.uid || ''
+          ...getAuthHeaders()
         },
         body: JSON.stringify({ password: resetPassword })
       });
@@ -109,7 +121,7 @@ export default function AdminPanel() {
     try {
       const res = await fetch(`${API_BASE_URL}/api/users/${userId}`, {
         method: 'DELETE',
-        headers: { 'x-user-id': auth.currentUser?.uid || '' }
+        headers: { ...getAuthHeaders() }
       });
       if (res.ok) {
         fetchUsers();
@@ -129,11 +141,11 @@ export default function AdminPanel() {
         <div className="bg-slate-800 rounded-2xl shadow-xl border border-slate-700 overflow-hidden sticky top-6">
           <div className="p-6 border-b border-slate-700 bg-slate-900/50 flex items-center gap-3">
             <UserPlus className="text-emerald-500 w-6 h-6" />
-            <h3 className="text-lg font-bold text-white">Create User</h3>
+            <h3 className="text-lg font-bold text-white">{t('createUser')}</h3>
           </div>
           <form onSubmit={handleCreateUser} className="p-6 space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-400 mb-1">Display Name</label>
+              <label className="block text-xs font-semibold text-slate-400 mb-1">{t('displayName')}</label>
               <input
                 type="text"
                 required
@@ -143,7 +155,7 @@ export default function AdminPanel() {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-400 mb-1">Email</label>
+              <label className="block text-xs font-semibold text-slate-400 mb-1">{t('email')}</label>
               <input
                 type="email"
                 required
@@ -153,17 +165,26 @@ export default function AdminPanel() {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-400 mb-1">Password</label>
-              <input
-                type="password"
-                required
-                className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white text-sm"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-              />
+              <label className="block text-xs font-semibold text-slate-400 mb-1">{t('password')}</label>
+              <div className="relative">
+                <input
+                  type={showNewPassword ? 'text' : 'password'}
+                  required
+                  className="w-full px-3 py-2 rtl:pl-10 ltr:pr-10 bg-slate-900/50 border border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white text-sm"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowNewPassword(!showNewPassword)}
+                  className="absolute rtl:left-2 ltr:right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-300 transition-colors"
+                >
+                  {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-400 mb-1">Department</label>
+              <label className="block text-xs font-semibold text-slate-400 mb-1">{t('department')}</label>
               <input
                 type="text"
                 required
@@ -173,7 +194,7 @@ export default function AdminPanel() {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-400 mb-1">Role</label>
+              <label className="block text-xs font-semibold text-slate-400 mb-1">{t('role')}</label>
               <select
                 className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white text-sm"
                 value={newRole}
@@ -190,7 +211,7 @@ export default function AdminPanel() {
               disabled={creating}
               className="w-full mt-4 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
             >
-              {creating ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Add User'}
+              {creating ? <Loader2 className="w-5 h-5 animate-spin" /> : t('addUser')}
             </button>
           </form>
         </div>
@@ -212,13 +233,13 @@ export default function AdminPanel() {
                 <Loader2 className="w-8 h-8 animate-spin text-emerald-500" />
               </div>
             ) : (
-              <table className="w-full text-left border-collapse">
+              <table className="w-full text-left rtl:text-right border-collapse">
                 <thead>
                   <tr className="bg-slate-900/80 border-b border-slate-700">
-                    <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">User</th>
-                    <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">Department</th>
-                    <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">Role</th>
-                    <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider text-right">Actions</th>
+                    <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">{t('email')}</th>
+                    <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">{t('department')}</th>
+                    <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">{t('role')}</th>
+                    <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider text-center ltr:text-right rtl:text-left">{t('actions')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-700">
@@ -275,31 +296,40 @@ export default function AdminPanel() {
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-800 rounded-2xl border border-slate-700 w-full max-w-sm overflow-hidden shadow-2xl">
             <div className="p-6">
-              <h3 className="text-lg font-bold text-white mb-2">Reset Password</h3>
+              <h3 className="text-lg font-bold text-white mb-2">{t('changePassword')}</h3>
               <p className="text-sm text-slate-400 mb-6">Enter a new password for <span className="font-semibold text-slate-200">{resettingUser.email}</span></p>
               
               <form onSubmit={handleResetPassword} className="space-y-4">
-                <input
-                  type="password"
-                  required
-                  placeholder="New Password"
-                  className="w-full px-4 py-2.5 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white"
-                  value={resetPassword}
-                  onChange={(e) => setResetPassword(e.target.value)}
-                />
+                <div className="relative">
+                  <input
+                    type={showResetPassword ? 'text' : 'password'}
+                    required
+                    placeholder={t('newPassword')}
+                    className="w-full px-4 py-2.5 rtl:pl-12 ltr:pr-12 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white"
+                    value={resetPassword}
+                    onChange={(e) => setResetPassword(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowResetPassword(!showResetPassword)}
+                    className="absolute rtl:left-3 ltr:right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-300 transition-colors"
+                  >
+                    {showResetPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
                 <div className="flex gap-3 mt-6">
                   <button
                     type="button"
-                    onClick={() => { setResettingUser(null); setResetPassword(''); }}
+                    onClick={() => { setResettingUser(null); setResetPassword(''); setShowResetPassword(false); }}
                     className="flex-1 py-2.5 px-4 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-semibold transition-colors"
                   >
-                    Cancel
+                    {t('cancel')}
                   </button>
                   <button
                     type="submit"
                     className="flex-1 py-2.5 px-4 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-semibold transition-colors shadow-lg shadow-rose-900/20"
                   >
-                    Confirm Reset
+                    {t('confirmReset')}
                   </button>
                 </div>
               </form>

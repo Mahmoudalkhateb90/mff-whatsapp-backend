@@ -34,8 +34,14 @@ export default function SingleMessage() {
         setPhoneNumber('');
         setMessage('');
       } else {
-        const error = await res.json();
-        setStatus({ type: 'error', text: error.error || 'Failed to send message' });
+        let errorMessage = 'Failed to send message';
+        try {
+          const errorData = await res.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch (e) {
+          errorMessage = `Server Error: ${res.status}`;
+        }
+        setStatus({ type: 'error', text: errorMessage });
       }
     } catch (err: any) {
       setStatus({ type: 'error', text: err.message || 'An error occurred' });

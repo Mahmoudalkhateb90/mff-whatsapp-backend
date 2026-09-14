@@ -21,7 +21,8 @@ export async function getSessionStatus(userId) {
     const session = activeSessions.get(userId);
     return {
       status: session.status || 'connecting',
-      qr: session.qrBase64 || null
+      qr: session.qrBase64 || null,
+      phone: session.sock && session.sock.user ? session.sock.user.id : null
     };
   }
   
@@ -60,6 +61,25 @@ export async function logoutSession(userId) {
   return { status: 'logged_out' };
 }
 
+export async function sendWhatsAppMessage(userId, to, message) {
+  const session = activeSessions.get(userId);
+  if (!session || !session.sock || session.status !== 'connected') {
+    throw new Error('WhatsApp session is not connected');
+  }
+
+  try {
+    const sock = session.sock;
+    // Basic sanitization
+    const formattedPhone = to.replace(/[^0-9]/g, '');
+    const jid = `${formattedPhone}@s.whatsapp.net`;
+
+    const result = await sock.sendMessage(jid, { text: message });
+    return { success: true, messageId: result.key.id };
+  } catch (err) {
+    console.error(`[WhatsApp] Send message error for ${userId}:`, err);
+    throw new Error('Failed to send WhatsApp message');
+  }
+}
 export async function startSession(userId) {
   ensureSessionsDir();
 

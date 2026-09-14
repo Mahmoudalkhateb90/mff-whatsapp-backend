@@ -9,6 +9,8 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from './firebase';
 import { API_BASE_URL } from './config';
 import { Loader2 } from 'lucide-react';
+import { SessionProvider } from './context/SessionContext';
+import { LanguageProvider } from './context/LanguageContext';
 
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
@@ -94,19 +96,21 @@ export default function App() {
   }
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        
-        {/* WhatsApp Session (QR Code) - All Roles */}
-        <Route 
-          path="/" 
-          element={
-            <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}>
-              <Dashboard />
-            </PrivateRoute>
-          } 
-        />
+    <LanguageProvider>
+    <SessionProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          
+          {/* WhatsApp Session (QR Code) - All Roles */}
+          <Route 
+            path="/" 
+            element={
+              <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}>
+                <Dashboard />
+              </PrivateRoute>
+            } 
+          />
         
         {/* Single Messaging - All Roles */}
         <Route 
@@ -149,5 +153,7 @@ export default function App() {
         />
       </Routes>
     </BrowserRouter>
+    </SessionProvider>
+    </LanguageProvider>
   );
 }
