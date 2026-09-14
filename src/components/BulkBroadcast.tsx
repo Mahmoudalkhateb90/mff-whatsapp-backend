@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Send, Loader2, Users, Upload, FileText } from 'lucide-react';
-import { auth } from '../firebase';
+
 import { API_BASE_URL } from '../config';
 
 export default function BulkBroadcast() {
@@ -53,10 +53,10 @@ export default function BulkBroadcast() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-user-id': auth.currentUser?.uid || ''
+            'x-user-id': JSON.parse(localStorage.getItem("user_session") || "{}").id || ''
           },
           body: JSON.stringify({
-            userId: auth.currentUser?.uid,
+            userId: JSON.parse(localStorage.getItem("user_session") || "{}").id,
             to: `${formattedPhone}@s.whatsapp.net`,
             message: messageTemplate
           })

@@ -5,8 +5,8 @@
 import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from './firebase';
+
+
 import { API_BASE_URL } from './config';
 import { Loader2 } from 'lucide-react';
 import { SessionProvider } from './context/SessionContext';
@@ -21,42 +21,11 @@ import BulkBroadcast from './components/BulkBroadcast';
 import Reports from './components/Reports';
 
 function PrivateRoute({ children, allowedRoles }: { children: ReactNode, allowedRoles?: string[] }) {
-  const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState<string | null>(null);
+  const sessionStr = localStorage.getItem('user_session');
+  const currentUser = sessionStr ? JSON.parse(sessionStr) : null;
+  const userRole = currentUser?.role || null;
 
-  useEffect(() => {
-    if (auth.currentUser) {
-      if (auth.currentUser.email === 'mahmoud.alkhateeb@money.jo') {
-        setUserRole('Super Admin');
-      }
-      
-      fetch(`${API_BASE_URL}/api/users/me`, {
-        headers: { 'x-user-id': auth.currentUser.uid }
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (auth.currentUser?.email === 'mahmoud.alkhateeb@money.jo') {
-           setUserRole('Super Admin');
-        } else {
-           setUserRole(data.role);
-        }
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-    } else {
-      setLoading(false);
-    }
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <Loader2 className="w-10 h-10 text-emerald-500 animate-spin" />
-      </div>
-    );
-  }
-
-  if (!auth.currentUser) {
+  if (!currentUser) {
     return <Navigate to="/login" replace />;
   }
 
@@ -78,23 +47,6 @@ function PrivateRoute({ children, allowedRoles }: { children: ReactNode, allowed
 }
 
 export default function App() {
-  const [authInitialized, setAuthInitialized] = useState(false);
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, () => {
-      setAuthInitialized(true);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  if (!authInitialized) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <Loader2 className="w-10 h-10 text-emerald-500 animate-spin" />
-      </div>
-    );
-  }
-
   return (
     <LanguageProvider>
     <SessionProvider>

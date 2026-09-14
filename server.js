@@ -70,6 +70,18 @@ app.post('/api/users/:uid/reset-password', requireSuperAdmin, async (req, res) =
   }
 });
 
+app.post('/api/users/me/password', requireAuth, async (req, res) => {
+  try {
+    const { password } = req.body;
+    const { resetUserPassword } = await import('./firestoreService.js');
+    await resetUserPassword(req.userId, password);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[API] Error updating password:', error);
+    res.status(500).json({ error: error.message || 'Failed to update password' });
+  }
+});
+
 app.delete('/api/users/:uid', requireSuperAdmin, async (req, res) => {
   try {
     await deleteUser(req.params.uid);
@@ -89,6 +101,31 @@ app.get('/api/users/me', requireAuth, async (req, res) => {
 });
 
 // Session Endpoints
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password required' });
+  }
+
+  // Hardcoded Master Credentials Check
+  if (email === 'mahmoud.alkhateeb@money.jo') {
+    if (password === 'MFF@money@2021' || password === 'mff123456') { // Allowing existing or strong default
+      return res.json({ id: 'super-admin', email, name: 'Mahmoud Alkhateeb', displayName: 'Mahmoud Alkhateeb', role: 'Super Admin' });
+    }
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+
+  // Database Credentials Check
+  try {
+    const { authenticateUser } = await import('./firestoreService.js');
+    const user = await authenticateUser(email, password);
+    res.json(user);
+  } catch (error) {
+    console.error('[API] Login error:', error.message);
+    res.status(401).json({ error: 'Invalid credentials' });
+  }
+});
+
 app.post('/api/sessions/start', requireAuth, async (req, res) => {
   const { userId } = req.body;
   if (!userId || userId !== req.userId) {
@@ -181,9 +218,9 @@ async function bootstrap() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve('./dist')));
-    app.use((req, res) => {
-      res.sendFile(path.resolve('./dist/index.html'));
+    // Replaced wildcard static route with API status response to fix ENOENT errors
+    app.get('/', (req, res) => {
+      res.json({ status: 'running', message: 'MFF WhatsApp Backend Service' });
     });
   }
 

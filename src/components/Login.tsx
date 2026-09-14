@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../firebase';
 import { useNavigate } from 'react-router-dom';
-import { Smartphone, Lock, User } from 'lucide-react';
+import { Smartphone, Lock, User, Eye, EyeOff, MessageCircle } from 'lucide-react';
+import { API_BASE_URL } from '../config';
 
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
@@ -18,8 +18,19 @@ export default function Login() {
     setLoading(true);
 
     try {
-      await signInWithEmailAndPassword(auth, email, password);
-      navigate('/');
+      const res = await fetch(`${API_BASE_URL}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to login');
+      }
+      
+      localStorage.setItem('user_session', JSON.stringify(data));
+      window.location.href = '/';
     } catch (err: any) {
       setError(err.message || 'Failed to login');
     } finally {
@@ -31,7 +42,7 @@ export default function Login() {
     <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-slate-100">
       <div className="w-full max-w-md bg-slate-800 rounded-2xl shadow-2xl border border-slate-700 overflow-hidden">
         <div className="bg-emerald-600/10 p-8 text-center border-b border-emerald-600/20">
-          <Smartphone className="w-16 h-16 mx-auto mb-4 text-emerald-500" />
+          <MessageCircle className="w-16 h-16 mx-auto mb-4 text-emerald-500" />
           <h1 className="text-3xl font-bold tracking-tight text-white">MFF WhatsApp</h1>
           <p className="text-emerald-400 mt-2 font-medium">Enterprise Authentication</p>
         </div>
@@ -46,34 +57,40 @@ export default function Login() {
           <div className="space-y-2">
             <label className="block text-sm font-semibold text-slate-400">Email Address</label>
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+              <div className="absolute inset-y-0 start-0 pl-4 flex items-center pointer-events-none ltr:left-0 rtl:right-0 ltr:pl-4 rtl:pr-4">
                 <User className="h-5 w-5 text-slate-500" />
               </div>
               <input
                 type="email"
                 required
-                className="w-full pl-11 pr-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-500 transition-all"
+                className="w-full pl-11 pr-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-500 transition-all ltr:pl-11 rtl:pr-11"
                 placeholder="admin@mff.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
             </div>
           </div>
-
           <div className="space-y-2">
             <label className="block text-sm font-semibold text-slate-400">Password</label>
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+              <div className="absolute inset-y-0 start-0 pl-4 flex items-center pointer-events-none ltr:left-0 rtl:right-0 ltr:pl-4 rtl:pr-4">
                 <Lock className="h-5 w-5 text-slate-500" />
               </div>
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 required
-                className="w-full pl-11 pr-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-500 transition-all"
+                className="w-full pl-11 pr-12 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-500 transition-all ltr:pl-11 ltr:pr-12 rtl:pr-11 rtl:pl-12"
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute inset-y-0 end-0 pr-4 flex items-center text-slate-400 hover:text-slate-300 ltr:right-0 rtl:left-0 ltr:pr-4 rtl:pl-4"
+              >
+                {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+              </button>
             </div>
           </div>
 

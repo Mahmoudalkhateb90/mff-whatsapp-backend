@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
-import { auth } from '../firebase';
+
 import { API_BASE_URL } from '../config';
 import { Users, UserPlus, Key, Loader2, ShieldCheck, Trash2, Eye, EyeOff } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
@@ -35,9 +35,9 @@ export default function AdminPanel() {
 
   const getAuthHeaders = () => {
     return {
-      'x-user-id': auth.currentUser?.uid || auth.currentUser?.email || '',
-      'x-user-email': auth.currentUser?.email || '',
-      'x-user-role': auth.currentUser?.email === 'mahmoud.alkhateeb@money.jo' ? 'Super Admin' : ''
+      'x-user-id': JSON.parse(localStorage.getItem("user_session") || "{}").id || JSON.parse(localStorage.getItem("user_session") || "{}")?.email || '',
+      'x-user-email': JSON.parse(localStorage.getItem("user_session") || "{}")?.email || '',
+      'x-user-role': JSON.parse(localStorage.getItem("user_session") || "{}")?.email === 'mahmoud.alkhateeb@money.jo' ? 'Super Admin' : ''
     };
   };
 
