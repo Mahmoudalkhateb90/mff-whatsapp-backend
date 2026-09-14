@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Shield, Smartphone, LogOut, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Shield, Smartphone, LogOut, CheckCircle2, RefreshCw, AlertTriangle } from 'lucide-react';
 import { auth } from '../firebase';
 import { API_BASE_URL } from '../config';
 
@@ -12,12 +12,15 @@ export default function Dashboard() {
   const checkStatus = async () => {
     if (!userId) return;
     try {
-      const res = await fetch(`${API_BASE_URL}/api/sessions/status/${userId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/session/status`, {
         headers: { 'x-user-id': userId }
       });
       if (res.ok) {
         const data = await res.json();
         setStatus(data.status);
+        if (data.qr) {
+          setQrBase64(data.qr);
+        }
       }
     } catch (err) {
       console.error('Failed to get status', err);
@@ -26,7 +29,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     checkStatus();
-    const interval = setInterval(checkStatus, 10000);
+    // Poll every 3 seconds for dynamic QR updates
+    const interval = setInterval(checkStatus, 3000);
     return () => clearInterval(interval);
   }, [userId]);
 
@@ -46,7 +50,7 @@ export default function Dashboard() {
       const data = await res.json();
       if (data.qr) {
         setQrBase64(data.qr);
-        setStatus('qr_ready');
+        setStatus('qr'); // Normalize to 'qr' based on new backend response
       } else if (data.status) {
         setStatus(data.status);
       }
@@ -61,13 +65,12 @@ export default function Dashboard() {
     if (!userId) return;
     setLoading(true);
     try {
-      await fetch(`${API_BASE_URL}/api/sessions/logout`, {
+      await fetch(`${API_BASE_URL}/api/session/reset`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
           'x-user-id': userId
-        },
-        body: JSON.stringify({ userId }),
+        }
       });
       setStatus('disconnected');
       setQrBase64(null);
@@ -76,6 +79,12 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const resetSession = async () => {
+    if (!userId) return;
+    await logoutSession();
+    await startSession();
   };
 
   return (
@@ -92,7 +101,7 @@ export default function Dashboard() {
             <div className="p-3 bg-slate-800 rounded-full">
               {status === 'connected' ? (
                 <CheckCircle2 className="text-emerald-500 w-8 h-8" />
-              ) : status === 'qr_ready' ? (
+              ) : status === 'qr' ? (
                 <RefreshCw className="text-amber-500 w-8 h-8 animate-spin-slow" />
               ) : (
                 <Shield className="text-slate-500 w-8 h-8" />
@@ -107,7 +116,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {qrBase64 && status === 'qr_ready' && (
+          {qrBase64 && status === 'qr' && (
             <div className="mb-8 flex flex-col items-center animate-in fade-in zoom-in duration-300">
               <div className="p-4 bg-white border-4 border-slate-700 rounded-2xl shadow-2xl">
                 <img src={qrBase64} alt="WhatsApp QR Code" className="w-56 h-56" />
@@ -119,7 +128,7 @@ export default function Dashboard() {
           )}
 
           <div className="flex gap-4">
-            {status !== 'connected' && status !== 'qr_ready' && (
+            {status !== 'connected' && status !== 'qr' && !status.includes('already_active') && (
               <button
                 onClick={startSession}
                 disabled={loading}
@@ -129,15 +138,25 @@ export default function Dashboard() {
               </button>
             )}
 
-            {(status === 'connected' || status === 'qr_ready' || status.includes('disconnected_but_has_creds')) && (
-              <button
-                onClick={logoutSession}
-                disabled={loading}
-                className="flex-1 flex items-center justify-center gap-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 font-semibold py-4 px-4 rounded-xl transition-colors disabled:opacity-50 text-lg"
-              >
-                <LogOut className="w-5 h-5" />
-                <span>Disconnect</span>
-              </button>
+            {(status === 'connected' || status === 'qr' || status.includes('disconnected_but_has_creds') || status === 'already_active' || status === 'connecting') && (
+              <>
+                <button
+                  onClick={resetSession}
+                  disabled={loading}
+                  className="flex-1 flex items-center justify-center gap-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/20 font-semibold py-4 px-4 rounded-xl transition-colors disabled:opacity-50 text-lg"
+                >
+                  <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+                  <span>Reset / Re-scan QR</span>
+                </button>
+                <button
+                  onClick={logoutSession}
+                  disabled={loading}
+                  className="flex-1 flex items-center justify-center gap-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 font-semibold py-4 px-4 rounded-xl transition-colors disabled:opacity-50 text-lg"
+                >
+                  <LogOut className="w-5 h-5" />
+                  <span>Disconnect</span>
+                </button>
+              </>
             )}
           </div>
         </div>

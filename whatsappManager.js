@@ -6,59 +6,81 @@ import pino from 'pino';
 import fs from 'fs';
 import { queueMessageLog, incrementCampaignStats } from './firestoreService.js';
 
-// Local storage path for Baileys auth states.
-// By storing auth state on the server disk, we avoid thousands of Firestore reads/writes.
 const SESSIONS_DIR = path.resolve('./sessions');
-
-// Store active socket instances and connection promises in memory
 const activeSessions = new Map();
-
-// Minimal logger to avoid massive console output
 const logger = pino({ level: 'silent' });
 
-/**
- * Helper to ensure the sessions directory exists
- */
 function ensureSessionsDir() {
   if (!fs.existsSync(SESSIONS_DIR)) {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
   }
 }
 
-/**
- * Fetches the connection status of a specific session
- */
 export async function getSessionStatus(userId) {
   if (activeSessions.has(userId)) {
     const session = activeSessions.get(userId);
-    return session.status || 'connected';
+    return {
+      status: session.status || 'connecting',
+      qr: session.qrBase64 || null
+    };
   }
   
-  // If not in memory, check disk for existing auth files
   const sessionPath = path.join(SESSIONS_DIR, userId);
   if (fs.existsSync(path.join(sessionPath, 'creds.json'))) {
-    return 'disconnected_but_has_creds';
+    return { status: 'disconnected_but_has_creds' };
   }
   
-  return 'disconnected';
+  return { status: 'disconnected' };
 }
 
-/**
- * Starts a new WhatsApp session or resumes an existing one.
- */
+export async function logoutSession(userId) {
+  const sessionData = activeSessions.get(userId);
+  if (sessionData && sessionData.sock) {
+    try {
+      await sessionData.sock.logout();
+    } catch (err) {
+      console.error(`[WhatsApp] Error logging out socket for ${userId}:`, err?.message);
+    }
+    try {
+      sessionData.sock.ws.close();
+    } catch (err) {
+      console.error(`[WhatsApp] Error closing socket for ${userId}:`, err?.message);
+    }
+    activeSessions.delete(userId);
+  }
+  
+  const sessionPath = path.join(SESSIONS_DIR, userId);
+  try {
+    await rimraf(sessionPath);
+    console.log(`[WhatsApp] Cleared session data for ${userId}`);
+  } catch (err) {
+    console.error(`[WhatsApp] Error deleting session dir for ${userId}:`, err?.message);
+  }
+  
+  return { status: 'logged_out' };
+}
+
 export async function startSession(userId) {
   ensureSessionsDir();
-  
-  // Return early if already in progress or connected
+
+  // If already active but NOT fully connected, kill the stuck session and reset
   if (activeSessions.has(userId)) {
-    return { status: 'already_active' };
+    const currentSession = activeSessions.get(userId);
+    if (currentSession.status !== 'connected') {
+      console.log(`[WhatsApp] Session for ${userId} is stuck in ${currentSession.status}. Forcing reset...`);
+      await logoutSession(userId);
+    } else {
+      return { status: 'already_active' };
+    }
   }
 
   const sessionPath = path.join(SESSIONS_DIR, userId);
-  
-  // useMultiFileAuthState stores creds locally in /sessions/{userId}
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
   const { version } = await fetchLatestBaileysVersion();
+
+  // We create a fresh entry immediately
+  const sessionEntry = { sock: null, status: 'connecting', qrBase64: null, resolveInit: null };
+  activeSessions.set(userId, sessionEntry);
 
   return new Promise((resolve, reject) => {
     try {
@@ -67,23 +89,29 @@ export async function startSession(userId) {
         auth: state,
         printQRInTerminal: false,
         logger,
-        syncFullHistory: false // optimize memory
+        syncFullHistory: false
       });
+      sessionEntry.sock = sock;
+      sessionEntry.resolveInit = resolve;
 
-      // Save credentials to local disk automatically
       sock.ev.on('creds.update', saveCreds);
 
-      // Handle Connection Lifecycle
       sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-
+        
         if (qr) {
           try {
             const qrBase64 = await QRCode.toDataURL(qr);
-            activeSessions.set(userId, { sock, status: 'connecting' });
-            resolve({ status: 'qr_ready', qr: qrBase64 });
+            sessionEntry.status = 'qr';
+            sessionEntry.qrBase64 = qrBase64;
+            
+            // Resolve the initial promise if it hasn't been resolved yet
+            if (sessionEntry.resolveInit) {
+              sessionEntry.resolveInit({ status: 'qr_ready', qr: qrBase64 });
+              sessionEntry.resolveInit = null;
+            }
           } catch (err) {
-            reject(err);
+            console.error('[WhatsApp] QR Code Generation Error:', err);
           }
         }
 
@@ -96,7 +124,6 @@ export async function startSession(userId) {
           
           if (shouldReconnect) {
             console.log(`[WhatsApp] Attempting reconnect for ${userId}...`);
-            // Add robust connection retry logic
             setTimeout(() => startSession(userId).catch(console.error), 5000); 
           } else {
             console.log(`[WhatsApp] Logged out for ${userId}. Clearing session.`);
@@ -104,20 +131,19 @@ export async function startSession(userId) {
           }
         } else if (connection === 'open') {
           console.log(`[WhatsApp] Session securely connected for ${userId}`);
-          activeSessions.set(userId, { sock, status: 'connected' });
+          sessionEntry.status = 'connected';
+          sessionEntry.qrBase64 = null;
           
-          // If we re-connected without needing a new QR (existing creds)
-          if (!qr) {
-             resolve({ status: 'connected' });
+          if (sessionEntry.resolveInit) {
+             sessionEntry.resolveInit({ status: 'connected' });
+             sessionEntry.resolveInit = null;
           }
         }
       });
 
-      // Example of capturing outbound messages for batch logging
-      sock.ev.on('messages.upsert', async (m) => {
+      sock.ev.on('messages.upsert', async (m) => { 
          if (m.type === 'notify') {
             for (const msg of m.messages) {
-                // If it's a message we sent (e.g. from a campaign)
                 if (msg.key.fromMe) {
                   queueMessageLog({
                       userId,
@@ -125,40 +151,17 @@ export async function startSession(userId) {
                       messageId: msg.key.id,
                       status: 'sent',
                   });
-                  
-                  // Extract campaign ID from msg if applicable, and increment summary
-                  // incrementCampaignStats('campaign_123', { messagesSent: 1 });
                 }
             }
          }
       });
-
     } catch (err) {
       console.error(`[WhatsApp] Init error for ${userId}:`, err);
+      activeSessions.delete(userId);
+      if (sessionEntry.resolveInit) {
+        sessionEntry.resolveInit = null;
+      }
       reject(err);
     }
   });
-}
-
-/**
- * Logs out a session, cleanly terminates the socket, and clears disk space.
- */
-export async function logoutSession(userId) {
-  const sessionData = activeSessions.get(userId);
-  if (sessionData && sessionData.sock) {
-    try {
-      await sessionData.sock.logout();
-      sessionData.sock.ws.close();
-    } catch (err) {
-      console.error(`[WhatsApp] Error closing socket for ${userId}:`, err);
-    }
-    activeSessions.delete(userId);
-  }
-  
-  // Wipe the local session directory to prevent stale state issues
-  const sessionPath = path.join(SESSIONS_DIR, userId);
-  await rimraf(sessionPath);
-  console.log(`[WhatsApp] Cleared session data for ${userId}`);
-  
-  return { status: 'logged_out' };
 }

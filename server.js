@@ -104,6 +104,27 @@ app.post('/api/sessions/start', requireAuth, async (req, res) => {
   }
 });
 
+app.get('/api/session/status', requireAuth, async (req, res) => {
+  try {
+    const statusData = await getSessionStatus(req.userId);
+    res.json(statusData);
+  } catch (error) {
+    console.error(`[SessionStatus] Error for user ${req.userId}:`, error);
+    res.status(500).json({ error: 'Failed to get session status' });
+  }
+});
+
+app.post('/api/session/reset', requireAuth, async (req, res) => {
+  try {
+    const result = await logoutSession(req.userId);
+    res.json(result);
+  } catch (error) {
+    console.error(`[LogoutSession] Error for user ${req.userId}:`, error);
+    res.status(500).json({ error: 'Failed to reset session' });
+  }
+});
+
+// Backward compatibility or alternative routes
 app.get('/api/sessions/status/:userId', requireAuth, async (req, res) => {
   const { userId } = req.params;
   if (userId !== req.userId && req.userRole !== 'Super Admin') {
