@@ -137,7 +137,7 @@ async function bootstrap() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.resolve('./dist')));
-    app.get('*', (req, res) => {
+    app.use((req, res) => {
       res.sendFile(path.resolve('./dist/index.html'));
     });
   }
