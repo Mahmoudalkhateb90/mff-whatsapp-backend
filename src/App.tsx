@@ -14,19 +14,30 @@ import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import AdminPanel from './components/AdminPanel';
 import Navbar from './components/Navbar';
+import SingleMessage from './components/SingleMessage';
+import BulkBroadcast from './components/BulkBroadcast';
+import Reports from './components/Reports';
 
-function PrivateRoute({ children, roleRequired }: { children: ReactNode, roleRequired?: string }) {
+function PrivateRoute({ children, allowedRoles }: { children: ReactNode, allowedRoles?: string[] }) {
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<string | null>(null);
 
   useEffect(() => {
     if (auth.currentUser) {
+      if (auth.currentUser.email === 'mahmoud.alkhateeb@money.jo') {
+        setUserRole('Super Admin');
+      }
+      
       fetch(`${API_BASE_URL}/api/users/me`, {
         headers: { 'x-user-id': auth.currentUser.uid }
       })
       .then(res => res.json())
       .then(data => {
-        setUserRole(data.role);
+        if (auth.currentUser?.email === 'mahmoud.alkhateeb@money.jo') {
+           setUserRole('Super Admin');
+        } else {
+           setUserRole(data.role);
+        }
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -47,7 +58,7 @@ function PrivateRoute({ children, roleRequired }: { children: ReactNode, roleReq
     return <Navigate to="/login" replace />;
   }
 
-  if (roleRequired && userRole !== roleRequired) {
+  if (allowedRoles && userRole && !allowedRoles.includes(userRole)) {
     return <Navigate to="/" replace />;
   }
 
@@ -86,19 +97,53 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        
+        {/* WhatsApp Session (QR Code) - All Roles */}
         <Route 
           path="/" 
           element={
-            <PrivateRoute>
+            <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}>
               <Dashboard />
             </PrivateRoute>
           } 
         />
+        
+        {/* Single Messaging - All Roles */}
+        <Route 
+          path="/single" 
+          element={
+            <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}>
+              <SingleMessage />
+            </PrivateRoute>
+          } 
+        />
+        
+        {/* Bulk Broadcast Campaign - Super Admin, Manager, Team Leader */}
+        <Route 
+          path="/bulk" 
+          element={
+            <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
+              <BulkBroadcast />
+            </PrivateRoute>
+          } 
+        />
+        
+        {/* User Management - Super Admin Only */}
         <Route 
           path="/admin/users" 
           element={
-            <PrivateRoute roleRequired="Super Admin">
+            <PrivateRoute allowedRoles={['Super Admin']}>
               <AdminPanel />
+            </PrivateRoute>
+          } 
+        />
+        
+        {/* Team Reports & Audit Logs - Super Admin, Manager, Team Leader */}
+        <Route 
+          path="/reports" 
+          element={
+            <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
+              <Reports />
             </PrivateRoute>
           } 
         />

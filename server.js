@@ -3,7 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { startSession, getSessionStatus, logoutSession } from './whatsappManager.js';
-import { getUserRole, getAllUsers, createUser, resetUserPassword } from './firestoreService.js';
+import { getUserRole, getAllUsers, createUser, resetUserPassword, deleteUser } from './firestoreService.js';
 
 const app = express();
 
@@ -67,6 +67,16 @@ app.post('/api/users/:uid/reset-password', requireSuperAdmin, async (req, res) =
   } catch (error) {
     console.error('[API] Error resetting password:', error);
     res.status(500).json({ error: error.message || 'Failed to reset password' });
+  }
+});
+
+app.delete('/api/users/:uid', requireSuperAdmin, async (req, res) => {
+  try {
+    await deleteUser(req.params.uid);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[API] Error deleting user:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete user' });
   }
 });
 

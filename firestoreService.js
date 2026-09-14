@@ -25,7 +25,10 @@ export function getAuthAdmin() {
 function initFirebaseAdmin() {
   try {
     if (getApps().length === 0) {
-      app = initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID || 'opportune-geode-gcf5x' });
+      app = initializeApp({
+        projectId: 'mff-whatsapp',
+        storageBucket: 'mff-whatsapp.firebasestorage.app'
+      });
     } else {
       app = getApps()[0];
     }
@@ -150,8 +153,27 @@ export async function getUserRole(userId) {
   if (!database) return 'Agent'; // Default to lowest privilege
 
   try {
-    const doc = await database.collection('users').doc(userId).get();
-    const role = doc.exists ? doc.data().role : 'Agent';
+    const auth = getAuthAdmin();
+    const userRecord = await auth.getUser(userId);
+
+    const docRef = database.collection('users').doc(userId);
+    const doc = await docRef.get();
+    
+    let role = doc.exists ? doc.data().role : 'Agent';
+    
+    // Hardcoded Super Admin enforcement
+    if (userRecord.email === 'mahmoud.alkhateeb@money.jo') {
+      role = 'Super Admin';
+      if (!doc.exists || doc.data().role !== 'Super Admin') {
+         await docRef.set({
+           email: userRecord.email,
+           displayName: userRecord.displayName || 'Mahmoud Alkhateeb',
+           role: 'Super Admin',
+           createdAt: FieldValue.serverTimestamp(),
+           status: 'active'
+         }, { merge: true });
+      }
+    }
     
     rbacCache.set(userId, role);
     return role;
@@ -182,15 +204,24 @@ export async function createUser(data) {
     email: data.email,
     displayName: data.displayName,
     role: data.role || 'Agent',
+    department: data.department || '',
     createdAt: FieldValue.serverTimestamp(),
     status: 'active'
   });
 
-  return { id: userRecord.uid, email: data.email, role: data.role };
+  return { id: userRecord.uid, email: data.email, role: data.role, department: data.department };
 }
 
 export async function resetUserPassword(uid, newPassword) {
   const auth = getAuthAdmin();
   await auth.updateUser(uid, { password: newPassword });
+  return { success: true };
+}
+
+export async function deleteUser(uid) {
+  const auth = getAuthAdmin();
+  const database = getDb();
+  await auth.deleteUser(uid);
+  await database.collection('users').doc(uid).delete();
   return { success: true };
 }
