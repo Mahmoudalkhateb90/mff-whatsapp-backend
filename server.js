@@ -1,16 +1,14 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import { createServer as createViteServer } from 'vite';
 import { startSession, getSessionStatus, logoutSession, sendWhatsAppMessage } from './whatsappManager.js';
 import { getUserRole, getAllUsers, createUser, resetUserPassword, deleteUser } from './firestoreService.js';
 
 const app = express();
 
 // Middleware
-app.use(cors({
-  origin: ['https://mff-wa.ai.studio', 'http://localhost:5173', 'http://localhost:3000'],
-  credentials: true
-}));
+app.use(cors());
 app.use(express.json());
 
 export async function requireAuth(req, res, next) {
@@ -213,39 +211,18 @@ const PORT = process.env.PORT || 3000;
 const isProd = process.env.NODE_ENV === 'production';
 
 async function bootstrap() {
-  app.get('/api/health', (req, res) => {
-    res.json({ status: 'online', service: 'MFF WhatsApp Backend API' });
-  });
-
-  app.get('/firebase-applet-config.json', (req, res) => {
-    res.json({});
-  });
-
   if (!isProd) {
-    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      if (!req.path.startsWith('/api')) {
-        res.sendFile(path.join(distPath, 'index.html'));
-      } else {
-        res.status(404).json({ error: 'Not found' });
-      }
+    // Replaced wildcard static route with API status response to fix ENOENT errors
+    app.get('/', (req, res) => {
+      res.json({ status: 'running', message: 'MFF WhatsApp Backend Service' });
     });
   }
-
-  // Handle any other unknown API endpoints
-  app.use((req, res) => {
-    if (req.path.startsWith('/api')) {
-      res.status(404).json({ error: 'Not found' });
-    }
-  });
 
   app.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
