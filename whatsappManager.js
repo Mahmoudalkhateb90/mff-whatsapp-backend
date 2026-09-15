@@ -776,8 +776,25 @@ export const logoutSession = resetSession;
 // Alias for startSession
 export const startSession = startFreshSession;
 
-export async function sendWhatsAppMessage(userId, to, message) {
-  const session = activeSessions.get(userId);
+/**
+ * Direct synchronous socket transmission helper used by Centralized Message Queue.
+ * Checks the agent's session, or falls back to any active connected session
+ * in the system so all 20-30 concurrent agents share the connection seamlessly.
+ */
+export async function sendWhatsAppMessageDirect(userId, to, message) {
+  let session = activeSessions.get(userId);
+
+  // Check shared pool if current userId does not own the active connection
+  if (!session || !session.sock || session.status !== 'connected') {
+    for (const [sUserId, s] of activeSessions.entries()) {
+      if (s && s.sock && s.status === 'connected') {
+        session = s;
+        console.log(`[WhatsApp] Multi-user router: Using shared active WhatsApp session (${sUserId}) for user (${userId})`);
+        break;
+      }
+    }
+  }
+
   if (!session || !session.sock || session.status !== 'connected') {
     throw new Error('WhatsApp session is not connected');
   }
@@ -794,3 +811,8 @@ export async function sendWhatsAppMessage(userId, to, message) {
     throw new Error('Failed to send WhatsApp message: ' + (err?.message || 'Unknown error'));
   }
 }
+
+export async function sendWhatsAppMessage(userId, to, message) {
+  return await sendWhatsAppMessageDirect(userId, to, message);
+}
+

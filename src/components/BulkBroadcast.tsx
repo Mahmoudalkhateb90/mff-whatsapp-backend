@@ -1,9 +1,28 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Loader2, Users, Upload, FileText, Download, Pause, Play, Square, CheckCircle2, AlertCircle } from 'lucide-react';
+import { 
+  Send, 
+  Loader2, 
+  Users, 
+  Upload, 
+  FileText, 
+  Download, 
+  Pause, 
+  Play, 
+  Square, 
+  CheckCircle2, 
+  AlertCircle, 
+  RotateCcw 
+} from 'lucide-react';
 import { API_BASE_URL } from '../config';
 import { useLanguage } from '../context/LanguageContext';
 
-const getSessionUser = () => { try { return JSON.parse(localStorage.getItem('user_session') || '{}'); } catch { return {}; } };
+const getSessionUser = () => { 
+  try { 
+    return JSON.parse(localStorage.getItem('user_session') || '{}'); 
+  } catch { 
+    return {}; 
+  } 
+};
 
 interface ContactItem {
   phone: string;
@@ -22,54 +41,55 @@ interface ActiveCampaignState {
   messageTemplate?: string;
 }
 
-const STORAGE_KEY_NUMBERS = 'mff_broadcast_draft_numbers';
-const STORAGE_KEY_CONTACTS = 'mff_broadcast_draft_contacts';
-const STORAGE_KEY_NAME = 'mff_broadcast_draft_name';
-const STORAGE_KEY_TEMPLATE = 'mff_broadcast_draft_template';
-
 export default function BulkBroadcast() {
   const { t } = useLanguage();
-  const [campaignName, setCampaignName] = useState(() => localStorage.getItem(STORAGE_KEY_NAME) || '');
-  const [numbersInput, setNumbersInput] = useState(() => localStorage.getItem(STORAGE_KEY_NUMBERS) || '');
+  const user = getSessionUser();
+  const userId = user?.id || 'default';
+
+  // Storage keys strictly scoped per user session to isolate concurrent users
+  const getStorageKey = (key: string) => `mff_broadcast_${userId}_${key}`;
+
+  const [campaignName, setCampaignName] = useState(() => localStorage.getItem(getStorageKey('name')) || '');
+  const [numbersInput, setNumbersInput] = useState(() => localStorage.getItem(getStorageKey('numbers')) || '');
   const [parsedContacts, setParsedContacts] = useState<ContactItem[]>(() => {
     try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY_CONTACTS) || '[]');
+      return JSON.parse(localStorage.getItem(getStorageKey('contacts')) || '[]');
     } catch {
       return [];
     }
   });
-  const [messageTemplate, setMessageTemplate] = useState(() => localStorage.getItem(STORAGE_KEY_TEMPLATE) || '');
-  const [throttleDelay, setThrottleDelay] = useState('5');
+  const [messageTemplate, setMessageTemplate] = useState(() => localStorage.getItem(getStorageKey('template')) || '');
+  const [throttleDelay, setThrottleDelay] = useState('3');
   const [submitting, setSubmitting] = useState(false);
   const [activeCampaign, setActiveCampaign] = useState<ActiveCampaignState | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollTimerRef = useRef<any>(null);
+  const dismissedCampaignIdRef = useRef<string | null>(null);
 
   // Check if uploaded CSV contains custom message per recipient
   const hasCustomMessages = parsedContacts.length > 0 && parsedContacts.some(c => !!c.message);
 
-  // Persist draft across navigation
+  // Persist draft across navigation strictly scoped per user
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_NAME, campaignName);
-  }, [campaignName]);
+    localStorage.setItem(getStorageKey('name'), campaignName);
+  }, [campaignName, userId]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_NUMBERS, numbersInput);
-  }, [numbersInput]);
+    localStorage.setItem(getStorageKey('numbers'), numbersInput);
+  }, [numbersInput, userId]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_CONTACTS, JSON.stringify(parsedContacts));
-  }, [parsedContacts]);
+    localStorage.setItem(getStorageKey('contacts'), JSON.stringify(parsedContacts));
+  }, [parsedContacts, userId]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_TEMPLATE, messageTemplate);
-  }, [messageTemplate]);
+    localStorage.setItem(getStorageKey('template'), messageTemplate);
+  }, [messageTemplate, userId]);
 
-  // Fetch active campaign from server
+  // Fetch active campaign from server strictly isolated for this user
   const fetchActiveCampaign = async () => {
-    const user = getSessionUser();
     if (!user.id) return;
 
     try {
@@ -82,9 +102,13 @@ export default function BulkBroadcast() {
       if (res.ok) {
         const data = await res.json();
         if (data && data.status && data.status !== 'idle') {
+          // If the user explicitly cleared this campaign from local UI view, do not re-populate the form
+          if (dismissedCampaignIdRef.current === data.id) {
+            return;
+          }
           setActiveCampaign(data);
-          if (data.name && !campaignName) setCampaignName(data.name);
-          if (data.messageTemplate && !messageTemplate) setMessageTemplate(data.messageTemplate);
+          if (data.name && !campaignName && !dismissedCampaignIdRef.current) setCampaignName(data.name);
+          if (data.messageTemplate && !messageTemplate && !dismissedCampaignIdRef.current) setMessageTemplate(data.messageTemplate);
         } else if (activeCampaign && (activeCampaign.status === 'running' || activeCampaign.status === 'paused')) {
           setActiveCampaign(prev => prev ? { ...prev, status: 'completed' } : null);
         }
@@ -105,7 +129,45 @@ export default function BulkBroadcast() {
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
-  }, []);
+  }, [userId]);
+
+  /**
+   * Reset local UI view cleanly without canceling or affecting background server jobs.
+   * Enables starting a fresh batch upload immediately.
+   */
+  const handleStartNewCampaign = () => {
+    // Remember currently dismissed campaign ID so background polling doesn't overwrite cleared inputs
+    if (activeCampaign?.id) {
+      dismissedCampaignIdRef.current = activeCampaign.id;
+    } else {
+      dismissedCampaignIdRef.current = '__cleared__';
+    }
+
+    // Reset local form states
+    setCampaignName('');
+    setNumbersInput('');
+    setParsedContacts([]);
+    setMessageTemplate('');
+    setThrottleDelay('3');
+    setActiveCampaign(null);
+    setStatusMessage({
+      type: 'info',
+      text: t('viewResetSuccess') || 'View reset. You can now start a fresh batch upload.'
+    });
+
+    // Reset file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+
+    // Clear saved drafts in localStorage for this user
+    try {
+      localStorage.removeItem(getStorageKey('name'));
+      localStorage.removeItem(getStorageKey('numbers'));
+      localStorage.removeItem(getStorageKey('contacts'));
+      localStorage.removeItem(getStorageKey('template'));
+    } catch (e) {}
+  };
 
   // CSV Template download
   const handleDownloadSampleCSV = () => {
@@ -204,7 +266,6 @@ export default function BulkBroadcast() {
     }
 
     setSubmitting(true);
-    const user = getSessionUser();
 
     try {
       const res = await fetch(`${API_BASE_URL}/api/campaigns/create`, {
@@ -217,15 +278,17 @@ export default function BulkBroadcast() {
         body: JSON.stringify({
           name: campaignName.trim() || `Campaign ${new Date().toLocaleDateString()}`,
           items: itemsToBroadcast,
-          delaySeconds: parseInt(throttleDelay, 10) || 5,
+          delaySeconds: parseInt(throttleDelay, 10) || 3,
           messageTemplate
         })
       });
 
-      if (res.ok) {
+      if (res.ok) { // 202 Accepted or 200 OK
         const campaign = await res.json();
+        // Reset dismissed flag so the new campaign progress is tracked
+        dismissedCampaignIdRef.current = null;
         setActiveCampaign(campaign);
-        setStatusMessage({ type: 'success', text: 'Campaign queued and running in background!' });
+        setStatusMessage({ type: 'success', text: 'Campaign queued and running sequentially in background!' });
       } else {
         const err = await res.json().catch(() => ({ error: 'Failed to start campaign' }));
         setStatusMessage({ type: 'error', text: err.error || 'Failed to start campaign' });
@@ -239,7 +302,6 @@ export default function BulkBroadcast() {
 
   const handlePause = async () => {
     if (!activeCampaign?.id) return;
-    const user = getSessionUser();
     try {
       const res = await fetch(`${API_BASE_URL}/api/campaigns/${activeCampaign.id}/pause`, {
         method: 'POST',
@@ -255,7 +317,6 @@ export default function BulkBroadcast() {
 
   const handleResume = async () => {
     if (!activeCampaign?.id) return;
-    const user = getSessionUser();
     try {
       const res = await fetch(`${API_BASE_URL}/api/campaigns/${activeCampaign.id}/resume`, {
         method: 'POST',
@@ -271,7 +332,6 @@ export default function BulkBroadcast() {
 
   const handleCancel = async () => {
     if (!activeCampaign?.id) return;
-    const user = getSessionUser();
     try {
       const res = await fetch(`${API_BASE_URL}/api/campaigns/${activeCampaign.id}/cancel`, {
         method: 'POST',
@@ -296,7 +356,7 @@ export default function BulkBroadcast() {
       {/* Campaign Form Section */}
       <div className="lg:col-span-2">
         <div className="bg-slate-800 rounded-2xl shadow-xl border border-slate-700 overflow-hidden">
-          <div className="p-6 border-b border-slate-700 bg-slate-900/50 flex items-center justify-between">
+          <div className="p-6 border-b border-slate-700 bg-slate-900/50 flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3">
               <Users className="text-emerald-500 w-6 h-6" />
               <div>
@@ -304,15 +364,31 @@ export default function BulkBroadcast() {
                 <p className="text-xs text-slate-400">{t('campaignEngine')}</p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={handleDownloadSampleCSV}
-              className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 rounded-lg transition-colors shadow-sm"
-              title="Download template with Phone and Message columns"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>{t('downloadSampleCSV')}</span>
-            </button>
+            
+            {/* Header Action Buttons */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                id="btn-clear-start-new"
+                onClick={handleStartNewCampaign}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg transition-all shadow-md shadow-emerald-950/20 active:scale-95"
+                title="Reset view and prepare a new campaign"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>{t('startNewCampaign') || 'Start New Campaign'}</span>
+              </button>
+
+              <button
+                type="button"
+                id="btn-download-sample-csv"
+                onClick={handleDownloadSampleCSV}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 rounded-lg transition-colors shadow-sm"
+                title="Download template with Phone and Message columns"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{t('downloadSampleCSV')}</span>
+              </button>
+            </div>
           </div>
           
           <form onSubmit={handleStartBroadcast} className="p-8 space-y-6">
@@ -322,6 +398,7 @@ export default function BulkBroadcast() {
               </label>
               <input
                 type="text"
+                id="input-campaign-name"
                 placeholder={t('campaignNamePlaceholder')}
                 className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-600"
                 value={campaignName}
@@ -337,6 +414,7 @@ export default function BulkBroadcast() {
                 </label>
                 <button
                   type="button"
+                  id="btn-upload-csv-trigger"
                   onClick={() => fileInputRef.current?.click()}
                   className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
                   disabled={activeCampaign?.status === 'running'}
@@ -350,41 +428,72 @@ export default function BulkBroadcast() {
                   accept=".txt,.csv"
                   className="hidden"
                   onChange={handleFileUpload}
+                  disabled={activeCampaign?.status === 'running'}
                 />
               </div>
+
+              {/* Upload Drop Zone / Preview */}
+              {parsedContacts.length > 0 ? (
+                <div className="p-4 bg-slate-900/80 border border-emerald-500/30 rounded-xl mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <FileText className="text-emerald-400 w-5 h-5" />
+                    <div>
+                      <p className="text-sm font-medium text-white">
+                        {parsedContacts.length} {t('contactsLoaded')}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {hasCustomMessages ? 'CSV includes individual recipient messages' : 'Using global message template'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    id="btn-remove-loaded-csv"
+                    onClick={() => {
+                      setParsedContacts([]);
+                      setNumbersInput('');
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                    className="text-xs font-medium text-rose-400 hover:text-rose-300 transition-colors px-2 py-1 bg-rose-500/10 rounded"
+                    disabled={activeCampaign?.status === 'running'}
+                  >
+                    {t('clearData') || 'Clear'}
+                  </button>
+                </div>
+              ) : (
+                <div 
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-4 mb-3 border-2 border-dashed border-slate-700 hover:border-emerald-500/50 rounded-xl bg-slate-900/30 text-center cursor-pointer transition-colors"
+                >
+                  <Upload className="w-6 h-6 mx-auto text-slate-500 mb-1" />
+                  <p className="text-xs font-medium text-slate-300">{t('dropCSVHere')}</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">{t('csvSupportedCols')}</p>
+                </div>
+              )}
+
               <textarea
-                required={parsedContacts.length === 0}
-                rows={4}
-                placeholder="962790000000&#10;962791111111"
-                className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-600 resize-none font-mono text-sm"
+                rows={5}
+                id="textarea-manual-numbers"
+                placeholder={`962790000000\n962791111111\n962792222222`}
+                className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-600 font-mono text-sm"
                 value={numbersInput}
                 onChange={(e) => {
                   setNumbersInput(e.target.value);
-                  setParsedContacts([]);
+                  if (parsedContacts.length > 0) setParsedContacts([]);
                 }}
                 disabled={activeCampaign?.status === 'running'}
               />
-              <p className="text-xs text-slate-500 mt-1">
-                {hasCustomMessages ? '✓ CSV detected with custom per-recipient message column' : t('csvSupportedCols')}
-              </p>
             </div>
 
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="block text-sm font-semibold text-slate-400">
-                  {t('messageTemplate')}
-                </label>
-                {hasCustomMessages && (
-                  <span className="text-xs text-emerald-400 font-medium">
-                    (Optional: CSV includes custom messages)
-                  </span>
-                )}
-              </div>
+              <label className="block text-sm font-semibold text-slate-400 mb-2">
+                {t('messageTemplate')}
+              </label>
               <textarea
-                required={!hasCustomMessages}
-                rows={5}
-                placeholder={hasCustomMessages ? 'Optional fallback message if a CSV row is missing a custom message...' : t('messageTemplatePlaceholder')}
-                className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-600 resize-none"
+                rows={4}
+                id="textarea-message-template"
+                placeholder={t('messageTemplatePlaceholder')}
+                className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-600"
                 value={messageTemplate}
                 onChange={(e) => setMessageTemplate(e.target.value)}
                 disabled={activeCampaign?.status === 'running'}
@@ -396,27 +505,37 @@ export default function BulkBroadcast() {
                 {t('delaySeconds')}
               </label>
               <select
-                className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white"
+                id="select-delay-seconds"
                 value={throttleDelay}
                 onChange={(e) => setThrottleDelay(e.target.value)}
+                className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white"
                 disabled={activeCampaign?.status === 'running'}
               >
-                <option value="1">1 second (Fast)</option>
-                <option value="3">3 seconds (Moderate)</option>
-                <option value="5">5 seconds (Recommended)</option>
-                <option value="10">10 seconds (Safe)</option>
-                <option value="15">15 seconds (High Safety)</option>
+                <option value="2">2 seconds (High Speed, Throttled)</option>
+                <option value="3">3 seconds (Recommended)</option>
+                <option value="5">5 seconds (Standard Safe)</option>
+                <option value="10">10 seconds (Strict Anti-Spam)</option>
               </select>
             </div>
 
-            {(!activeCampaign || activeCampaign.status === 'completed' || activeCampaign.status === 'cancelled') && (
+            {(!activeCampaign || activeCampaign.status !== 'running') && (
               <button
                 type="submit"
-                disabled={submitting || (!numbersInput && parsedContacts.length === 0) || (!messageTemplate && !hasCustomMessages)}
-                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20"
+                id="btn-submit-campaign"
+                disabled={submitting || total === 0}
+                className="w-full py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white font-bold rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
               >
-                {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-                <span>{submitting ? t('sending') : t('startCampaign')}</span>
+                {submitting ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>{t('authenticating')}</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-5 h-5" />
+                    <span>{t('startCampaign')}</span>
+                  </>
+                )}
               </button>
             )}
           </form>
@@ -468,6 +587,7 @@ export default function BulkBroadcast() {
                   {activeCampaign.status === 'running' ? (
                     <button
                       type="button"
+                      id="btn-pause-campaign"
                       onClick={handlePause}
                       className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 border border-amber-500/30 rounded-lg text-sm font-semibold transition-colors"
                     >
@@ -477,6 +597,7 @@ export default function BulkBroadcast() {
                   ) : (
                     <button
                       type="button"
+                      id="btn-resume-campaign"
                       onClick={handleResume}
                       className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-sm font-semibold transition-colors"
                     >
@@ -486,6 +607,7 @@ export default function BulkBroadcast() {
                   )}
                   <button
                     type="button"
+                    id="btn-cancel-campaign"
                     onClick={handleCancel}
                     className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 rounded-lg text-sm font-semibold transition-colors"
                   >
@@ -525,6 +647,17 @@ export default function BulkBroadcast() {
                 </div>
               </div>
             )}
+
+            {/* Prominent Reset / Start New Campaign Action in Side Panel */}
+            <button
+              type="button"
+              id="btn-side-start-new"
+              onClick={handleStartNewCampaign}
+              className="w-full mt-6 flex items-center justify-center gap-2 py-3 px-4 bg-slate-700/60 hover:bg-slate-700 text-slate-200 border border-slate-600/70 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-98"
+            >
+              <RotateCcw className="w-4 h-4 text-emerald-400" />
+              <span>{t('startNewCampaign') || 'Start New Campaign / Clear'}</span>
+            </button>
           </div>
         </div>
       </div>

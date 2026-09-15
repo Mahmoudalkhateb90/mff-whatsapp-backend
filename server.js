@@ -16,6 +16,7 @@ import {
 } from './whatsappManager.js';
 import { getUserRole, getAllUsers, createUser, resetUserPassword, deleteUser, getDb, getAnalyticsMetrics } from './firestoreService.js';
 import { createCampaign, pauseCampaign, resumeCampaign, cancelCampaign, getActiveCampaign } from './campaignManager.js';
+import { enqueueMessage, getQueueStats } from './messageQueue.js';
 
 const app = express();
 
@@ -280,18 +281,47 @@ app.post('/api/sessions/logout', requireAuth, async (req, res) => {
   }
 });
 
+// Async Message Queue Endpoints (Immediate 202 Accepted for 20-30 concurrent users)
 app.post('/api/send-message', requireAuth, async (req, res) => {
   try {
     const { to, message } = req.body;
     if (!to || !message) {
       return res.status(400).json({ error: 'Missing to or message' });
     }
-    const result = await sendWhatsAppMessage(req.userId, to, message);
-    res.json(result);
+    const result = enqueueMessage({
+      userId: req.userId,
+      to,
+      message,
+      priority: 'high'
+    });
+    res.status(202).json(result);
   } catch (error) {
     console.error(`[SendMessage] Error for user ${req.userId}:`, error.message);
-    res.status(500).json({ error: error.message || 'Failed to send message' });
+    res.status(500).json({ error: error.message || 'Failed to enqueue message' });
   }
+});
+
+app.post('/api/messages/send', requireAuth, async (req, res) => {
+  try {
+    const { to, message } = req.body;
+    if (!to || !message) {
+      return res.status(400).json({ error: 'Missing to or message' });
+    }
+    const result = enqueueMessage({
+      userId: req.userId,
+      to,
+      message,
+      priority: 'high'
+    });
+    res.status(202).json(result);
+  } catch (error) {
+    console.error(`[MessagesSend] Error for user ${req.userId}:`, error.message);
+    res.status(500).json({ error: error.message || 'Failed to enqueue message' });
+  }
+});
+
+app.get('/api/queue/stats', requireAuth, (req, res) => {
+  res.json(getQueueStats());
 });
 
 // Campaign Engine Endpoints
@@ -308,7 +338,12 @@ app.post('/api/campaigns/create', requireAuth, async (req, res) => {
       messageTemplate,
       userId: req.userId
     });
-    res.json(campaign);
+    // Immediately respond with 202 Accepted to prevent UI lag or freeze
+    res.status(202).json({
+      success: true,
+      message: 'Campaign accepted and running sequentially in background',
+      ...campaign
+    });
   } catch (error) {
     console.error('[API] Create campaign error:', error);
     res.status(500).json({ error: error.message || 'Failed to create campaign' });
