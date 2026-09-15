@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Smartphone, LogOut, KeyRound } from 'lucide-react';
-
 import { useNavigate, Link, useLocation } from 'react-router-dom';
+import { useLanguage } from '../context/LanguageContext';
 
 const getSessionUser = () => { try { return JSON.parse(localStorage.getItem('user_session') || '{}'); } catch { return {}; } };
 
@@ -12,6 +12,7 @@ interface NavbarProps {
 export default function Navbar({ userRole }: NavbarProps) {
   const navigate = useNavigate();
   const location = useLocation();
+  const { language, setLanguage, t } = useLanguage();
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [passwordError, setPasswordError] = useState('');
@@ -30,19 +31,19 @@ export default function Navbar({ userRole }: NavbarProps) {
     if (!getSessionUser().id) return;
     try {
       alert('Password update not supported in direct API mode yet');
-      setPasswordSuccess('Password updated successfully');
+      setPasswordSuccess(t('passwordSuccess'));
       setTimeout(() => setShowPasswordModal(false), 2000);
     } catch (error: any) {
-      setPasswordError(error.message || 'Failed to update password');
+      setPasswordError(error.message || t('passwordError'));
     }
   };
 
   const navLinks = [
-    { name: 'WhatsApp Session', path: '/', roles: ['Super Admin', 'Department Manager', 'Team Leader', 'Agent'] },
-    { name: 'Single Messaging', path: '/single', roles: ['Super Admin', 'Department Manager', 'Team Leader', 'Agent'] },
-    { name: 'Bulk Broadcast', path: '/bulk', roles: ['Super Admin', 'Department Manager', 'Team Leader'] },
-    { name: 'User Management', path: '/admin/users', roles: ['Super Admin'] },
-    { name: 'Reports & Logs', path: '/reports', roles: ['Super Admin', 'Department Manager', 'Team Leader'] },
+    { key: 'navSession', name: t('navSession'), path: '/', roles: ['Super Admin', 'Department Manager', 'Team Leader', 'Agent'] },
+    { key: 'navSingleMessage', name: t('navSingleMessage'), path: '/single', roles: ['Super Admin', 'Department Manager', 'Team Leader', 'Agent'] },
+    { key: 'navBulkBroadcast', name: t('navBulkBroadcast'), path: '/bulk', roles: ['Super Admin', 'Department Manager', 'Team Leader'] },
+    { key: 'navUserManagement', name: t('navUserManagement'), path: '/admin/users', roles: ['Super Admin'] },
+    { key: 'navReports', name: t('navReports'), path: '/reports', roles: ['Super Admin', 'Department Manager', 'Team Leader'] },
   ];
 
   return (
@@ -51,7 +52,7 @@ export default function Navbar({ userRole }: NavbarProps) {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center gap-6">
-              <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity mr-4">
+              <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity mr-4 rtl:ml-4 rtl:mr-0">
                 <div className="bg-emerald-500/10 p-1.5 rounded-lg border border-emerald-500/20">
                   <Smartphone className="w-6 h-6 text-emerald-400" />
                 </div>
@@ -79,9 +80,37 @@ export default function Navbar({ userRole }: NavbarProps) {
               </div>
             </div>
 
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-3 border-l border-slate-800 pl-4 md:pl-6">
-                <div className="flex flex-col items-end">
+            <div className="flex items-center gap-3">
+              {/* Language Switcher Toggle */}
+              <div className="flex items-center bg-slate-800/80 rounded-lg p-1 border border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setLanguage('en')}
+                  className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors ${
+                    language === 'en'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="English"
+                >
+                  EN
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLanguage('ar')}
+                  className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors ${
+                    language === 'ar'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="العربية"
+                >
+                  AR
+                </button>
+              </div>
+
+              <div className="flex items-center gap-3 border-l border-slate-800 pl-3 md:pl-4 rtl:border-r rtl:border-l-0 rtl:pr-3 rtl:pl-0">
+                <div className="flex flex-col items-end rtl:items-start">
                   <span className="text-sm font-semibold text-slate-200">
                     {getSessionUser().name || getSessionUser().email || 'User'}
                   </span>
@@ -93,7 +122,7 @@ export default function Navbar({ userRole }: NavbarProps) {
                 <button
                   onClick={() => setShowPasswordModal(true)}
                   className="p-2 text-slate-400 hover:bg-slate-800 hover:text-white rounded-lg transition-colors border border-transparent hover:border-slate-700"
-                  title="Change Password"
+                  title={t('changePassword')}
                 >
                   <KeyRound className="w-5 h-5" />
                 </button>
@@ -101,7 +130,7 @@ export default function Navbar({ userRole }: NavbarProps) {
                 <button
                   onClick={handleLogout}
                   className="p-2 text-slate-400 hover:bg-rose-500/10 hover:text-rose-400 rounded-lg transition-colors border border-transparent hover:border-rose-500/20"
-                  title="Logout"
+                  title={t('logout')}
                 >
                   <LogOut className="w-5 h-5" />
                 </button>
@@ -137,12 +166,12 @@ export default function Navbar({ userRole }: NavbarProps) {
       {showPasswordModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-md p-6">
-            <h2 className="text-xl font-bold text-white mb-4">Change Password</h2>
+            <h2 className="text-xl font-bold text-white mb-4">{t('changePassword')}</h2>
             {passwordError && <div className="mb-4 text-rose-400 text-sm">{passwordError}</div>}
             {passwordSuccess && <div className="mb-4 text-emerald-400 text-sm">{passwordSuccess}</div>}
             <form onSubmit={handleChangePassword}>
               <div className="mb-4">
-                <label className="block text-sm font-medium text-slate-400 mb-1">New Password</label>
+                <label className="block text-sm font-medium text-slate-400 mb-1">{t('newPassword')}</label>
                 <input
                   type="password"
                   value={newPassword}
@@ -158,13 +187,13 @@ export default function Navbar({ userRole }: NavbarProps) {
                   onClick={() => setShowPasswordModal(false)}
                   className="px-4 py-2 text-slate-400 hover:text-white transition-colors"
                 >
-                  Cancel
+                  {t('cancel')}
                 </button>
                 <button
                   type="submit"
                   className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-medium transition-colors"
                 >
-                  Update Password
+                  {t('confirmReset')}
                 </button>
               </div>
             </form>

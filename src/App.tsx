@@ -117,10 +117,26 @@ export default function App() {
               </PrivateRoute>
             } 
           />
+          <Route 
+            path="/users" 
+            element={
+              <PrivateRoute allowedRoles={['Super Admin']}>
+                <AdminPanel />
+              </PrivateRoute>
+            } 
+          />
           
           {/* Team Reports & Audit Logs - Super Admin, Manager, Team Leader */}
           <Route 
             path="/reports" 
+            element={
+              <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
+                <Reports />
+              </PrivateRoute>
+            } 
+          />
+          <Route 
+            path="/analytics" 
             element={
               <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
                 <Reports />

@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with role-based access control and team assignments",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "enum": ["Super Admin", "Department Manager", "Team Leader", "Agent"] },
+        "department": { "type": "string", "maxLength": 100 },
+        "teamLeaderId": { "type": "string", "maxLength": 128 },
+        "teamLeaderName": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role"]
+    },
+    "Campaign": {
+      "title": "Campaign",
+      "description": "Bulk broadcast campaign state and progress tracking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["running", "paused", "completed", "cancelled"] },
+        "totalRecords": { "type": "number" },
+        "sentCount": { "type": "number" },
+        "failedCount": { "type": "number" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "status", "totalRecords", "sentCount", "failedCount"]
+    },
+    "MessageLog": {
+      "title": "MessageLog",
+      "description": "Audit log of sent or failed WhatsApp messages",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "remoteJid": { "type": "string" },
+        "messageId": { "type": "string" },
+        "status": { "type": "string", "enum": ["sent", "failed"] },
+        "phone": { "type": "string" },
+        "campaignId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles and RBAC role assignments"
+    },
+    "/campaigns/{campaignId}": {
+      "schema": { "$ref": "#/entities/Campaign" },
+      "description": "Bulk broadcast campaigns and execution status"
+    },
+    "/messages_log/{logId}": {
+      "schema": { "$ref": "#/entities/MessageLog" },
+      "description": "Audit logs for individual message delivery"
+    },
+    "/messageLogs/{logId}": {
+      "schema": { "$ref": "#/entities/MessageLog" },
+      "description": "Alias collection for audit logs"
+    }
+  }
+}

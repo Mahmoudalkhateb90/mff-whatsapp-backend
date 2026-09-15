@@ -16,6 +16,27 @@ function ensureSessionsDir() {
   }
 }
 
+export async function autoRestoreSessions() {
+  ensureSessionsDir();
+  try {
+    const entries = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const userId = entry.name;
+        const credsPath = path.join(SESSIONS_DIR, userId, 'creds.json');
+        if (fs.existsSync(credsPath)) {
+          console.log(`[WhatsApp] Auto-restoring persistent session for ${userId}...`);
+          startSession(userId).catch(err => {
+            console.warn(`[WhatsApp] Auto-restore attempt for ${userId} will retry:`, err?.message);
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[WhatsApp] Error in autoRestoreSessions:', err?.message);
+  }
+}
+
 export async function getSessionStatus(userId) {
   if (activeSessions.has(userId)) {
     const session = activeSessions.get(userId);
@@ -28,7 +49,9 @@ export async function getSessionStatus(userId) {
   
   const sessionPath = path.join(SESSIONS_DIR, userId);
   if (fs.existsSync(path.join(sessionPath, 'creds.json'))) {
-    return { status: 'disconnected_but_has_creds' };
+    // Automatically trigger background reconnection if saved credentials exist
+    startSession(userId).catch(err => console.warn(`[WhatsApp] Auto-connect on status check failed:`, err?.message));
+    return { status: 'reconnecting' };
   }
   
   return { status: 'disconnected' };
@@ -36,16 +59,21 @@ export async function getSessionStatus(userId) {
 
 export async function logoutSession(userId) {
   const sessionData = activeSessions.get(userId);
-  if (sessionData && sessionData.sock) {
-    try {
-      await sessionData.sock.logout();
-    } catch (err) {
-      console.error(`[WhatsApp] Error logging out socket for ${userId}:`, err?.message);
+  if (sessionData) {
+    if (sessionData.reconnectTimer) {
+      clearTimeout(sessionData.reconnectTimer);
     }
-    try {
-      sessionData.sock.ws.close();
-    } catch (err) {
-      console.error(`[WhatsApp] Error closing socket for ${userId}:`, err?.message);
+    if (sessionData.sock) {
+      try {
+        await sessionData.sock.logout();
+      } catch (err) {
+        console.error(`[WhatsApp] Error logging out socket for ${userId}:`, err?.message);
+      }
+      try {
+        sessionData.sock.ws.close();
+      } catch (err) {
+        console.error(`[WhatsApp] Error closing socket for ${userId}:`, err?.message);
+      }
     }
     activeSessions.delete(userId);
   }
@@ -74,23 +102,32 @@ export async function sendWhatsAppMessage(userId, to, message) {
     const jid = `${formattedPhone}@s.whatsapp.net`;
 
     const result = await sock.sendMessage(jid, { text: message });
-    return { success: true, messageId: result.key.id };
+    return { success: true, messageId: result.key?.id };
   } catch (err) {
-    console.error(`[WhatsApp] Send message error for ${userId}:`, err);
-    throw new Error('Failed to send WhatsApp message');
+    console.error(`[WhatsApp] Send message error for ${userId}:`, err?.message || err);
+    throw new Error('Failed to send WhatsApp message: ' + (err?.message || 'Unknown error'));
   }
 }
+
 export async function startSession(userId) {
   ensureSessionsDir();
 
-  // If already active but NOT fully connected, kill the stuck session and reset
+  // If already active and connected, return immediately
   if (activeSessions.has(userId)) {
     const currentSession = activeSessions.get(userId);
-    if (currentSession.status !== 'connected') {
-      console.log(`[WhatsApp] Session for ${userId} is stuck in ${currentSession.status}. Forcing reset...`);
-      await logoutSession(userId);
-    } else {
+    if (currentSession.status === 'connected') {
       return { status: 'already_active' };
+    }
+    if (currentSession.reconnectTimer) {
+      clearTimeout(currentSession.reconnectTimer);
+      currentSession.reconnectTimer = null;
+    }
+    if (currentSession.sock && currentSession.status !== 'connecting') {
+      try {
+        currentSession.sock.ws?.close();
+      } catch (e) {
+        // ignore
+      }
     }
   }
 
@@ -98,9 +135,13 @@ export async function startSession(userId) {
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
   const { version } = await fetchLatestBaileysVersion();
 
-  // We create a fresh entry immediately
-  const sessionEntry = { sock: null, status: 'connecting', qrBase64: null, resolveInit: null };
-  activeSessions.set(userId, sessionEntry);
+  let sessionEntry = activeSessions.get(userId);
+  if (!sessionEntry) {
+    sessionEntry = { sock: null, status: 'connecting', qrBase64: null, resolveInit: null, reconnectTimer: null };
+    activeSessions.set(userId, sessionEntry);
+  } else {
+    sessionEntry.status = 'connecting';
+  }
 
   return new Promise((resolve, reject) => {
     try {
@@ -109,8 +150,12 @@ export async function startSession(userId) {
         auth: state,
         printQRInTerminal: false,
         logger,
-        syncFullHistory: false
+        syncFullHistory: false,
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 25000,
+        defaultQueryTimeoutMs: 60000
       });
+
       sessionEntry.sock = sock;
       sessionEntry.resolveInit = resolve;
 
@@ -125,7 +170,6 @@ export async function startSession(userId) {
             sessionEntry.status = 'qr';
             sessionEntry.qrBase64 = qrBase64;
             
-            // Resolve the initial promise if it hasn't been resolved yet
             if (sessionEntry.resolveInit) {
               sessionEntry.resolveInit({ status: 'qr_ready', qr: qrBase64 });
               sessionEntry.resolveInit = null;
@@ -137,22 +181,35 @@ export async function startSession(userId) {
 
         if (connection === 'close') {
           const statusCode = lastDisconnect?.error?.output?.statusCode;
-          const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+          const isExplicitLogout = statusCode === DisconnectReason.loggedOut;
           
-          activeSessions.delete(userId);
-          console.log(`[WhatsApp] Connection closed for ${userId}. Reason: ${statusCode}`);
+          console.log(`[WhatsApp] Connection closed for ${userId}. StatusCode: ${statusCode}, isLoggedOut: ${isExplicitLogout}`);
           
-          if (shouldReconnect) {
-            console.log(`[WhatsApp] Attempting reconnect for ${userId}...`);
-            setTimeout(() => startSession(userId).catch(console.error), 5000); 
+          if (!isExplicitLogout) {
+            sessionEntry.status = 'reconnecting';
+            sessionEntry.qrBase64 = null;
+            console.log(`[WhatsApp] Network drop/reset detected for ${userId}. Auto-reconnecting in 4s...`);
+            
+            if (sessionEntry.reconnectTimer) {
+              clearTimeout(sessionEntry.reconnectTimer);
+            }
+            sessionEntry.reconnectTimer = setTimeout(() => {
+              startSession(userId).catch(err => {
+                console.error(`[WhatsApp] Auto-reconnect retry error for ${userId}:`, err?.message);
+              });
+            }, 4000);
           } else {
-            console.log(`[WhatsApp] Logged out for ${userId}. Clearing session.`);
+            console.log(`[WhatsApp] Session explicitly logged out for ${userId}. Clearing session.`);
             await logoutSession(userId);
           }
         } else if (connection === 'open') {
           console.log(`[WhatsApp] Session securely connected for ${userId}`);
           sessionEntry.status = 'connected';
           sessionEntry.qrBase64 = null;
+          if (sessionEntry.reconnectTimer) {
+            clearTimeout(sessionEntry.reconnectTimer);
+            sessionEntry.reconnectTimer = null;
+          }
           
           if (sessionEntry.resolveInit) {
              sessionEntry.resolveInit({ status: 'connected' });
@@ -164,7 +221,7 @@ export async function startSession(userId) {
       sock.ev.on('messages.upsert', async (m) => { 
          if (m.type === 'notify') {
             for (const msg of m.messages) {
-                if (msg.key.fromMe) {
+                if (msg.key?.fromMe) {
                   queueMessageLog({
                       userId,
                       remoteJid: msg.key.remoteJid,
@@ -177,7 +234,7 @@ export async function startSession(userId) {
       });
     } catch (err) {
       console.error(`[WhatsApp] Init error for ${userId}:`, err);
-      activeSessions.delete(userId);
+      sessionEntry.status = 'disconnected';
       if (sessionEntry.resolveInit) {
         sessionEntry.resolveInit = null;
       }

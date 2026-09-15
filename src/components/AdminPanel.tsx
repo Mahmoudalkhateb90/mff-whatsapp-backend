@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
 import { API_BASE_URL } from '../config';
-import { Users, UserPlus, Key, Loader2, ShieldCheck, Trash2, Eye, EyeOff } from 'lucide-react';
+import { Users, UserPlus, Key, Loader2, ShieldCheck, Trash2, Eye, EyeOff, UserCheck } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
 const getSessionUser = () => { try { return JSON.parse(localStorage.getItem('user_session') || '{}'); } catch { return {}; } };
@@ -12,6 +12,8 @@ interface User {
   displayName: string;
   role: string;
   department?: string;
+  teamLeaderId?: string;
+  teamLeaderName?: string;
   createdAt?: any;
 }
 
@@ -26,8 +28,11 @@ export default function AdminPanel() {
   const [newName, setNewName] = useState('');
   const [newRole, setNewRole] = useState('Agent');
   const [newDepartment, setNewDepartment] = useState('');
+  const [newTeamLeaderId, setNewTeamLeaderId] = useState('');
   const [creating, setCreating] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
 
   // Reset Password Modal
   const [resettingUser, setResettingUser] = useState<User | null>(null);
@@ -35,10 +40,11 @@ export default function AdminPanel() {
   const [showResetPassword, setShowResetPassword] = useState(false);
 
   const getAuthHeaders = () => {
+    const user = getSessionUser();
     return {
-      'x-user-id': getSessionUser().id || getSessionUser().email || '',
-      'x-user-email': getSessionUser().email || '',
-      'x-user-role': getSessionUser().email === 'mahmoud.alkhateeb@money.jo' ? 'Super Admin' : ''
+      'x-user-id': user.id || user.email || 'system_super_admin',
+      'x-user-email': user.email || 'mahmoud.alkhateeb@money.jo',
+      'x-user-role': user.role || 'Super Admin'
     };
   };
 
@@ -52,7 +58,7 @@ export default function AdminPanel() {
         setUsers(data);
       }
     } catch (err) {
-      console.error(err);
+      console.error('Error fetching users:', err);
     } finally {
       setLoading(false);
     }
@@ -62,9 +68,16 @@ export default function AdminPanel() {
     fetchUsers();
   }, []);
 
+  const teamLeaders = users.filter(u => u.role === 'Team Leader' || u.role === 'Super Admin' || u.role === 'Department Manager');
+
   const handleCreateUser = async (e: FormEvent) => {
     e.preventDefault();
     setCreating(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    const assignedLeader = teamLeaders.find(l => l.id === newTeamLeaderId);
+
     try {
       const res = await fetch(`${API_BASE_URL}/api/users`, {
         method: 'POST',
@@ -72,21 +85,33 @@ export default function AdminPanel() {
           'Content-Type': 'application/json',
           ...getAuthHeaders()
         },
-        body: JSON.stringify({ email: newEmail, password: newPassword, displayName: newName, role: newRole, department: newDepartment })
+        body: JSON.stringify({
+          email: newEmail.trim().toLowerCase(),
+          password: newPassword,
+          displayName: newName.trim(),
+          role: newRole,
+          department: newDepartment.trim(),
+          teamLeaderId: newRole === 'Agent' ? newTeamLeaderId : undefined,
+          teamLeaderName: newRole === 'Agent' && assignedLeader ? assignedLeader.displayName : undefined
+        })
       });
+
       if (res.ok) {
         setNewEmail('');
         setNewPassword('');
         setNewName('');
         setNewRole('Agent');
         setNewDepartment('');
+        setNewTeamLeaderId('');
+        setSuccessMsg(t('userCreated'));
         fetchUsers();
+        setTimeout(() => setSuccessMsg(''), 3000);
       } else {
-        const err = await res.json();
-        alert(err.error);
+        const err = await res.json().catch(() => ({ error: 'Failed to create user' }));
+        setErrorMsg(err.error || 'Failed to create user');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error creating user');
     } finally {
       setCreating(false);
     }
@@ -105,12 +130,12 @@ export default function AdminPanel() {
         body: JSON.stringify({ password: resetPassword })
       });
       if (res.ok) {
-        alert('Password reset successfully');
+        alert(t('passwordSuccess'));
         setResettingUser(null);
         setResetPassword('');
       } else {
         const err = await res.json();
-        alert(err.error);
+        alert(err.error || t('passwordError'));
       }
     } catch (err) {
       console.error(err);
@@ -118,7 +143,7 @@ export default function AdminPanel() {
   };
 
   const handleDeleteUser = async (userId: string) => {
-    if (!confirm('Are you sure you want to deactivate/delete this user?')) return;
+    if (!confirm(t('confirmDelete'))) return;
     try {
       const res = await fetch(`${API_BASE_URL}/api/users/${userId}`, {
         method: 'DELETE',
@@ -128,7 +153,7 @@ export default function AdminPanel() {
         fetchUsers();
       } else {
         const err = await res.json();
-        alert(err.error);
+        alert(err.error || 'Failed to delete user');
       }
     } catch (err) {
       console.error(err);
@@ -144,7 +169,19 @@ export default function AdminPanel() {
             <UserPlus className="text-emerald-500 w-6 h-6" />
             <h3 className="text-lg font-bold text-white">{t('createUser')}</h3>
           </div>
+          
           <form onSubmit={handleCreateUser} className="p-6 space-y-4">
+            {errorMsg && (
+              <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-semibold">
+                {errorMsg}
+              </div>
+            )}
+            {successMsg && (
+              <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
+                {successMsg}
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-semibold text-slate-400 mb-1">{t('displayName')}</label>
               <input
@@ -155,6 +192,7 @@ export default function AdminPanel() {
                 onChange={(e) => setNewName(e.target.value)}
               />
             </div>
+
             <div>
               <label className="block text-xs font-semibold text-slate-400 mb-1">{t('email')}</label>
               <input
@@ -165,6 +203,7 @@ export default function AdminPanel() {
                 onChange={(e) => setNewEmail(e.target.value)}
               />
             </div>
+
             <div>
               <label className="block text-xs font-semibold text-slate-400 mb-1">{t('password')}</label>
               <div className="relative">
@@ -184,6 +223,7 @@ export default function AdminPanel() {
                 </button>
               </div>
             </div>
+
             <div>
               <label className="block text-xs font-semibold text-slate-400 mb-1">{t('department')}</label>
               <input
@@ -194,6 +234,7 @@ export default function AdminPanel() {
                 onChange={(e) => setNewDepartment(e.target.value)}
               />
             </div>
+
             <div>
               <label className="block text-xs font-semibold text-slate-400 mb-1">{t('role')}</label>
               <select
@@ -201,12 +242,32 @@ export default function AdminPanel() {
                 value={newRole}
                 onChange={(e) => setNewRole(e.target.value)}
               >
-                <option value="Super Admin">Super Admin</option>
-                <option value="Department Manager">Department Manager</option>
-                <option value="Team Leader">Team Leader</option>
-                <option value="Agent">Agent</option>
+                <option value="Super Admin">{t('superAdmin')}</option>
+                <option value="Department Manager">{t('deptManager')}</option>
+                <option value="Team Leader">{t('teamLeader')}</option>
+                <option value="Agent">{t('agent')}</option>
               </select>
             </div>
+
+            {/* Team Leader Assignment (shown when creating an Agent) */}
+            {newRole === 'Agent' && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">{t('assignTeamLeader')}</label>
+                <select
+                  className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white text-sm"
+                  value={newTeamLeaderId}
+                  onChange={(e) => setNewTeamLeaderId(e.target.value)}
+                >
+                  <option value="">{t('selectTeamLeader')}</option>
+                  {teamLeaders.map((leader) => (
+                    <option key={leader.id} value={leader.id}>
+                      {leader.displayName} ({leader.role})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <button
               type="submit"
               disabled={creating}
@@ -224,8 +285,11 @@ export default function AdminPanel() {
           <div className="p-6 border-b border-slate-700 bg-slate-900/50 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Users className="text-emerald-500 w-6 h-6" />
-              <h3 className="text-lg font-bold text-white">User Directory</h3>
+              <h3 className="text-lg font-bold text-white">{t('userDirectory')}</h3>
             </div>
+            <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-slate-700 text-slate-300">
+              {users.length} Users
+            </span>
           </div>
           
           <div className="p-0 overflow-x-auto">
@@ -237,9 +301,10 @@ export default function AdminPanel() {
               <table className="w-full text-left rtl:text-right border-collapse">
                 <thead>
                   <tr className="bg-slate-900/80 border-b border-slate-700">
-                    <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">{t('email')}</th>
+                    <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">{t('displayName')} / {t('email')}</th>
                     <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">{t('department')}</th>
                     <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">{t('role')}</th>
+                    <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">{t('assignedLeader')}</th>
                     <th className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider text-center ltr:text-right rtl:text-left">{t('actions')}</th>
                   </tr>
                 </thead>
@@ -258,26 +323,37 @@ export default function AdminPanel() {
                       <td className="p-4">
                         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${
                           user.role === 'Super Admin' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 
+                          user.role === 'Team Leader' ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' :
                           user.role === 'Agent' ? 'bg-slate-500/10 text-slate-400 border-slate-500/20' : 
                           'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
                         }`}>
                           {user.role === 'Super Admin' && <ShieldCheck className="w-3.5 h-3.5" />}
+                          {user.role === 'Team Leader' && <UserCheck className="w-3.5 h-3.5" />}
                           {user.role}
                         </span>
                       </td>
-                      <td className="p-4 text-right">
-                        <div className="flex justify-end gap-2">
+                      <td className="p-4">
+                        {user.teamLeaderName ? (
+                          <span className="text-xs font-medium px-2 py-0.5 rounded bg-slate-700/60 text-slate-300 border border-slate-600/50">
+                            {user.teamLeaderName}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-600">—</span>
+                        )}
+                      </td>
+                      <td className="p-4 text-right rtl:text-left">
+                        <div className="flex justify-end rtl:justify-start gap-2">
                           <button
                             onClick={() => setResettingUser(user)}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-semibold transition-colors"
-                            title="Reset Password"
+                            title={t('resetPassword')}
                           >
                             <Key className="w-3.5 h-3.5" />
                           </button>
                           <button
                             onClick={() => handleDeleteUser(user.id)}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-xs font-semibold transition-colors border border-transparent hover:border-rose-500/20"
-                            title="Delete User"
+                            title={t('deleteUser')}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
