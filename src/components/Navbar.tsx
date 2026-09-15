@@ -7,9 +7,13 @@ const getSessionUser = () => { try { return JSON.parse(localStorage.getItem('use
 
 interface NavbarProps {
   userRole: string;
+  permissions?: {
+    canSendSingle?: boolean;
+    canSendBulk?: boolean;
+  };
 }
 
-export default function Navbar({ userRole }: NavbarProps) {
+export default function Navbar({ userRole, permissions }: NavbarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { language, setLanguage, t } = useLanguage();
@@ -17,6 +21,16 @@ export default function Navbar({ userRole }: NavbarProps) {
   const [newPassword, setNewPassword] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [passwordSuccess, setPasswordSuccess] = useState('');
+
+  const sessionUser = getSessionUser();
+  const effectivePermissions = permissions || sessionUser.permissions || {
+    canSendSingle: userRole === 'Super Admin' ? true : true,
+    canSendBulk: userRole === 'Super Admin'
+  };
+
+  const isSuper = userRole === 'Super Admin';
+  const canSingle = isSuper || effectivePermissions.canSendSingle !== false;
+  const canBulk = isSuper || effectivePermissions.canSendBulk === true;
 
   const handleLogout = async () => {
     localStorage.removeItem('user_session');
@@ -39,11 +53,11 @@ export default function Navbar({ userRole }: NavbarProps) {
   };
 
   const navLinks = [
-    { key: 'navSession', name: t('navSession'), path: '/', roles: ['Super Admin', 'Department Manager', 'Team Leader', 'Agent'] },
-    { key: 'navSingleMessage', name: t('navSingleMessage'), path: '/single', roles: ['Super Admin', 'Department Manager', 'Team Leader', 'Agent'] },
-    { key: 'navBulkBroadcast', name: t('navBulkBroadcast'), path: '/bulk', roles: ['Super Admin', 'Department Manager', 'Team Leader'] },
-    { key: 'navUserManagement', name: t('navUserManagement'), path: '/admin/users', roles: ['Super Admin'] },
-    { key: 'navReports', name: t('navReports'), path: '/reports', roles: ['Super Admin', 'Department Manager', 'Team Leader'] },
+    { key: 'navSession', name: t('navSession'), path: '/', roles: ['Super Admin', 'Department Manager', 'Team Leader', 'Agent'], visible: true },
+    { key: 'navSingleMessage', name: t('navSingleMessage'), path: '/single', roles: ['Super Admin', 'Department Manager', 'Team Leader', 'Agent'], visible: canSingle },
+    { key: 'navBulkBroadcast', name: t('navBulkBroadcast'), path: '/bulk', roles: ['Super Admin', 'Department Manager', 'Team Leader', 'Agent'], visible: canBulk },
+    { key: 'navUserManagement', name: t('navUserManagement'), path: '/admin/users', roles: ['Super Admin'], visible: isSuper },
+    { key: 'navReports', name: t('navReports'), path: '/reports', roles: ['Super Admin', 'Department Manager', 'Team Leader'], visible: true },
   ];
 
   return (
@@ -61,7 +75,7 @@ export default function Navbar({ userRole }: NavbarProps) {
 
               <div className="hidden lg:flex items-center gap-1">
                 {navLinks.map((link) => {
-                  if (!link.roles.includes(userRole)) return null;
+                  if (!link.roles.includes(userRole) || !link.visible) return null;
                   const isActive = location.pathname === link.path;
                   return (
                     <Link
@@ -144,7 +158,7 @@ export default function Navbar({ userRole }: NavbarProps) {
       <div className="lg:hidden bg-slate-900 border-b border-slate-800 overflow-x-auto">
         <div className="flex p-2 gap-2 max-w-7xl mx-auto">
           {navLinks.map((link) => {
-            if (!link.roles.includes(userRole)) return null;
+            if (!link.roles.includes(userRole) || !link.visible) return null;
             const isActive = location.pathname === link.path;
             return (
               <Link

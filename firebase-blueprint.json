@@ -12,6 +12,13 @@
         "teamLeaderId": { "type": "string", "maxLength": 128 },
         "teamLeaderName": { "type": "string", "maxLength": 100 },
         "status": { "type": "string", "enum": ["active", "inactive"] },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "canSendSingle": { "type": "boolean" },
+            "canSendBulk": { "type": "boolean" }
+          }
+        },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["email", "role"]

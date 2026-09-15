@@ -271,17 +271,23 @@ async function initializeDefaultSuperAdmin() {
         role: 'Super Admin',
         password,
         department: 'Management',
+        permissions: {
+          canSendSingle: true,
+          canSendBulk: true
+        },
         createdAt: new Date().toISOString(),
         status: 'active'
       }, { merge: true });
       console.log('[Firestore] Default Super Admin ensured in Firestore /users.');
     } else {
-      if (docSnap.data()?.role !== 'Super Admin' || !docSnap.data()?.password) {
-        await userDoc.set({
-          role: 'Super Admin',
-          password: docSnap.data()?.password || password
-        }, { merge: true });
-      }
+      await userDoc.set({
+        role: 'Super Admin',
+        password: docSnap.data()?.password || password,
+        permissions: {
+          canSendSingle: true,
+          canSendBulk: true
+        }
+      }, { merge: true });
     }
   } catch (error) {
     console.warn('[Firestore] Super Admin check notice:', error.message);
@@ -289,6 +295,7 @@ async function initializeDefaultSuperAdmin() {
 }
 
 const rbacCache = new NodeCache({ stdTTL: 3600 });
+const permissionsCache = new NodeCache({ stdTTL: 3600 });
 let messageLogQueue = [];
 const BATCH_SIZE = 50;
 const FLUSH_INTERVAL_MS = 15 * 1000;
@@ -376,6 +383,72 @@ export async function getUserRole(userId) {
   }
 }
 
+/**
+ * Retrieves granular feature permissions for a user.
+ * Super Admin always bypasses all checks with full true permissions.
+ * Default for standard users: canSendSingle = true, canSendBulk = false.
+ */
+export async function getUserPermissions(userId, userEmail = null) {
+  if (
+    userId === 'super-admin' || 
+    userId === 'mahmoud.alkhateeb@money.jo' || 
+    userEmail === 'mahmoud.alkhateeb@money.jo'
+  ) {
+    return { canSendSingle: true, canSendBulk: true };
+  }
+
+  const cacheKey = `perm_${userId || userEmail}`;
+  const cached = permissionsCache.get(cacheKey);
+  if (cached) return cached;
+
+  const database = getDb();
+  if (!database) {
+    return { canSendSingle: true, canSendBulk: false };
+  }
+
+  try {
+    let userData = null;
+    if (userId) {
+      const docSnap = await database.collection('users').doc(userId).get();
+      if (docSnap.exists) {
+        userData = docSnap.data();
+      }
+    }
+
+    if (!userData && (userEmail || userId)) {
+      const email = (userEmail || userId).toLowerCase();
+      const snap = await database.collection('users').where('email', '==', email).limit(1).get();
+      if (!snap.empty) {
+        userData = snap.docs[0].data();
+      }
+    }
+
+    if (userData) {
+      if (userData.role === 'Super Admin') {
+        const perms = { canSendSingle: true, canSendBulk: true };
+        permissionsCache.set(cacheKey, perms);
+        return perms;
+      }
+
+      const defaultBulk = userData.role === 'Department Manager' || userData.role === 'Team Leader';
+      const perms = {
+        canSendSingle: userData.permissions?.canSendSingle !== false,
+        canSendBulk: typeof userData.permissions?.canSendBulk === 'boolean'
+          ? userData.permissions.canSendBulk
+          : defaultBulk
+      };
+      permissionsCache.set(cacheKey, perms);
+      return perms;
+    }
+  } catch (err) {
+    console.warn(`[Firestore] Permissions lookup notice for ${userId}:`, err.message);
+  }
+
+  const defaultPerms = { canSendSingle: true, canSendBulk: false };
+  permissionsCache.set(cacheKey, defaultPerms);
+  return defaultPerms;
+}
+
 export async function getAllUsers() {
   const database = getDb();
   if (!database) return [];
@@ -383,6 +456,18 @@ export async function getAllUsers() {
     const snapshot = await database.collection('users').get();
     return snapshot.docs.map(docSnap => {
       const data = docSnap.data();
+      const isSuper = data.role === 'Super Admin';
+      const defaultBulk = isSuper || data.role === 'Department Manager' || data.role === 'Team Leader';
+
+      const permissions = isSuper
+        ? { canSendSingle: true, canSendBulk: true }
+        : {
+            canSendSingle: data.permissions?.canSendSingle !== false,
+            canSendBulk: typeof data.permissions?.canSendBulk === 'boolean'
+              ? data.permissions.canSendBulk
+              : defaultBulk
+          };
+
       return {
         id: docSnap.id,
         email: data.email,
@@ -391,6 +476,7 @@ export async function getAllUsers() {
         department: data.department || '',
         teamLeaderId: data.teamLeaderId || null,
         teamLeaderName: data.teamLeaderName || '',
+        permissions,
         createdAt: data.createdAt
       };
     });
@@ -402,13 +488,22 @@ export async function getAllUsers() {
 
 /**
  * Stores user credentials and details directly into Firestore /users
- * without calling unconfigured GCP auth services.
+ * Sets default permissions for newly created standard users to canSendSingle: true, canSendBulk: false
  */
 export async function createUser(data) {
   const database = getDb();
   const uid = 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
 
   const role = data.role || 'Agent';
+  const isSuper = role === 'Super Admin';
+
+  const permissions = isSuper
+    ? { canSendSingle: true, canSendBulk: true }
+    : {
+        canSendSingle: data.permissions?.canSendSingle !== false,
+        canSendBulk: data.permissions?.canSendBulk === true
+      };
+
   const userData = {
     email: data.email?.trim().toLowerCase(),
     displayName: data.displayName?.trim() || data.name?.trim() || '',
@@ -416,6 +511,7 @@ export async function createUser(data) {
     department: data.department?.trim() || '',
     teamLeaderId: role === 'Agent' ? (data.teamLeaderId || null) : null,
     teamLeaderName: role === 'Agent' ? (data.teamLeaderName || '') : '',
+    permissions,
     createdAt: new Date().toISOString(),
     status: 'active',
     password: data.password || ''
@@ -432,7 +528,63 @@ export async function createUser(data) {
     role: userData.role,
     department: userData.department,
     teamLeaderId: userData.teamLeaderId,
-    teamLeaderName: userData.teamLeaderName
+    teamLeaderName: userData.teamLeaderName,
+    permissions: userData.permissions
+  };
+}
+
+/**
+ * Updates user profile and granular permissions in Firestore
+ */
+export async function updateUser(uid, updateData) {
+  const database = getDb();
+  if (!database) {
+    throw new Error('Database is not initialized');
+  }
+
+  const docRef = database.collection('users').doc(uid);
+  const docSnap = await docRef.get();
+
+  if (!docSnap.exists) {
+    throw new Error('User not found');
+  }
+
+  const currentData = docSnap.data();
+  const role = updateData.role || currentData.role || 'Agent';
+  const isSuper = role === 'Super Admin';
+
+  let permissions = currentData.permissions || { canSendSingle: true, canSendBulk: false };
+  if (isSuper) {
+    permissions = { canSendSingle: true, canSendBulk: true };
+  } else if (updateData.permissions) {
+    permissions = {
+      canSendSingle: updateData.permissions.canSendSingle !== false,
+      canSendBulk: updateData.permissions.canSendBulk === true
+    };
+  }
+
+  const fieldsToUpdate = {
+    ...(updateData.displayName !== undefined ? { displayName: updateData.displayName.trim() } : {}),
+    ...(updateData.department !== undefined ? { department: updateData.department.trim() } : {}),
+    ...(updateData.role !== undefined ? { role } : {}),
+    ...(updateData.teamLeaderId !== undefined ? { teamLeaderId: role === 'Agent' ? updateData.teamLeaderId : null } : {}),
+    ...(updateData.teamLeaderName !== undefined ? { teamLeaderName: role === 'Agent' ? updateData.teamLeaderName : '' } : {}),
+    permissions,
+    updatedAt: new Date().toISOString()
+  };
+
+  await docRef.set(fieldsToUpdate, { merge: true });
+
+  // Invalidate caches
+  rbacCache.del(uid);
+  if (currentData.email) rbacCache.del(currentData.email);
+  permissionsCache.del(`perm_${uid}`);
+  if (currentData.email) permissionsCache.del(`perm_${currentData.email}`);
+
+  return {
+    id: uid,
+    ...currentData,
+    ...fieldsToUpdate
   };
 }
 

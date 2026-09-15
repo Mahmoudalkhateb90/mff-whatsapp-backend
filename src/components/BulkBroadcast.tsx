@@ -11,7 +11,8 @@ import {
   Square, 
   CheckCircle2, 
   AlertCircle, 
-  RotateCcw 
+  RotateCcw,
+  ShieldAlert 
 } from 'lucide-react';
 import { API_BASE_URL } from '../config';
 import { useLanguage } from '../context/LanguageContext';
@@ -45,6 +46,8 @@ export default function BulkBroadcast() {
   const { t } = useLanguage();
   const user = getSessionUser();
   const userId = user?.id || 'default';
+  const isSuper = user?.role === 'Super Admin';
+  const hasBulkPermission = isSuper || user?.permissions?.canSendBulk === true;
 
   // Storage keys strictly scoped per user session to isolate concurrent users
   const getStorageKey = (key: string) => `mff_broadcast_${userId}_${key}`;
@@ -254,6 +257,11 @@ export default function BulkBroadcast() {
       itemsToBroadcast = lines.map(phone => ({ phone }));
     }
 
+    if (!hasBulkPermission) {
+      setStatusMessage({ type: 'error', text: t('noBulkPermission') });
+      return;
+    }
+
     if (itemsToBroadcast.length === 0) {
       setStatusMessage({ type: 'error', text: 'Please enter or upload at least one valid phone number.' });
       return;
@@ -392,6 +400,13 @@ export default function BulkBroadcast() {
           </div>
           
           <form onSubmit={handleStartBroadcast} className="p-8 space-y-6">
+            {!hasBulkPermission && (
+              <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-sm flex items-center gap-2.5">
+                <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0" />
+                <span>{t('noBulkPermission')}</span>
+              </div>
+            )}
+
             <div>
               <label className="block text-sm font-semibold text-slate-400 mb-2">
                 {t('campaignName')}
@@ -522,7 +537,8 @@ export default function BulkBroadcast() {
               <button
                 type="submit"
                 id="btn-submit-campaign"
-                disabled={submitting || total === 0}
+                disabled={submitting || total === 0 || !hasBulkPermission}
+                title={!hasBulkPermission ? t('noBulkPermission') : undefined}
                 className="w-full py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white font-bold rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
               >
                 {submitting ? (

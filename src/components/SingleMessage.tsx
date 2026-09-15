@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Send, Loader2, MessageSquare } from 'lucide-react';
+import { Send, Loader2, MessageSquare, ShieldAlert } from 'lucide-react';
 import { API_BASE_URL } from '../config';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -7,6 +7,10 @@ const getSessionUser = () => { try { return JSON.parse(localStorage.getItem('use
 
 export default function SingleMessage() {
   const { t } = useLanguage();
+  const user = getSessionUser();
+  const isSuper = user.role === 'Super Admin';
+  const hasPermission = isSuper || user.permissions?.canSendSingle !== false;
+
   const [phoneNumber, setPhoneNumber] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -14,6 +18,10 @@ export default function SingleMessage() {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!hasPermission) {
+      setStatus({ type: 'error', text: t('noSinglePermission') });
+      return;
+    }
     setLoading(true);
     setStatus(null);
 
@@ -64,6 +72,13 @@ export default function SingleMessage() {
         </div>
         
         <form onSubmit={handleSendMessage} className="p-8 space-y-6">
+          {!hasPermission && (
+            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-sm flex items-center gap-2.5">
+              <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0" />
+              <span>{t('noSinglePermission')}</span>
+            </div>
+          )}
+
           {status && (
             <div className={`p-4 rounded-xl text-sm font-medium border ${
               status.type === 'success' 
@@ -107,7 +122,8 @@ export default function SingleMessage() {
 
           <button
             type="submit"
-            disabled={loading || !phoneNumber || !message}
+            disabled={loading || !phoneNumber || !message || !hasPermission}
+            title={!hasPermission ? t('noSinglePermission') : undefined}
             className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20"
           >
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}

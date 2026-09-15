@@ -14,7 +14,17 @@ import {
   sendWhatsAppMessage, 
   autoRestoreSessions 
 } from './whatsappManager.js';
-import { getUserRole, getAllUsers, createUser, resetUserPassword, deleteUser, getDb, getAnalyticsMetrics } from './firestoreService.js';
+import { 
+  getUserRole, 
+  getUserPermissions, 
+  getAllUsers, 
+  createUser, 
+  updateUser, 
+  resetUserPassword, 
+  deleteUser, 
+  getDb, 
+  getAnalyticsMetrics 
+} from './firestoreService.js';
 import { createCampaign, pauseCampaign, resumeCampaign, cancelCampaign, getActiveCampaign } from './campaignManager.js';
 import { enqueueMessage, getQueueStats } from './messageQueue.js';
 
@@ -47,7 +57,11 @@ app.post('/api/login', async (req, res) => {
           id: 'super-admin',
           email: 'mahmoud.alkhateeb@money.jo',
           name: 'Mahmoud Alkhateeb',
-          role: 'Super Admin'
+          role: 'Super Admin',
+          permissions: {
+            canSendSingle: true,
+            canSendBulk: true
+          }
         }
       });
     }
@@ -62,13 +76,28 @@ app.post('/api/login', async (req, res) => {
           const userData = userDoc.data();
 
           if (!userData.password || userData.password?.trim() === cleanPassword) {
+            const isSuper = userData.role === 'Super Admin';
+            const defaultBulk = isSuper || userData.role === 'Department Manager' || userData.role === 'Team Leader';
+            const permissions = isSuper
+              ? { canSendSingle: true, canSendBulk: true }
+              : {
+                  canSendSingle: userData.permissions?.canSendSingle !== false,
+                  canSendBulk: typeof userData.permissions?.canSendBulk === 'boolean'
+                    ? userData.permissions.canSendBulk
+                    : defaultBulk
+                };
+
             return res.json({
               success: true,
               user: {
                 id: userDoc.id,
                 email: userData.email,
                 name: userData.displayName || '',
-                role: userData.role || 'Agent'
+                role: userData.role || 'Agent',
+                department: userData.department || '',
+                teamLeaderId: userData.teamLeaderId || null,
+                teamLeaderName: userData.teamLeaderName || '',
+                permissions
               }
             });
           }
@@ -129,6 +158,50 @@ export async function requireSuperAdmin(req, res, next) {
   next();
 }
 
+/**
+ * Middleware: Verify user has single messaging permission
+ * Super Admin bypasses with true.
+ */
+export async function requireSinglePermission(req, res, next) {
+  if (req.userRole === 'Super Admin' || req.userId === 'super-admin') {
+    return next();
+  }
+
+  const userEmail = req.headers['x-user-email'];
+  const perms = await getUserPermissions(req.userId, userEmail);
+
+  if (!perms.canSendSingle) {
+    return res.status(403).json({ 
+      error: 'Access Denied: You do not have permission to send single messages',
+      permission: 'canSendSingle'
+    });
+  }
+
+  next();
+}
+
+/**
+ * Middleware: Verify user has bulk broadcast permission
+ * Super Admin bypasses with true.
+ */
+export async function requireBulkPermission(req, res, next) {
+  if (req.userRole === 'Super Admin' || req.userId === 'super-admin') {
+    return next();
+  }
+
+  const userEmail = req.headers['x-user-email'];
+  const perms = await getUserPermissions(req.userId, userEmail);
+
+  if (!perms.canSendBulk) {
+    return res.status(403).json({ 
+      error: 'Access Denied: You do not have permission to run bulk broadcasts',
+      permission: 'canSendBulk'
+    });
+  }
+
+  next();
+}
+
 // User Management Routes
 app.get('/api/users', requireSuperAdmin, async (req, res) => {
   try {
@@ -147,6 +220,16 @@ app.post('/api/users', requireSuperAdmin, async (req, res) => {
   } catch (error) {
     console.error('[API] Error creating user:', error);
     res.status(500).json({ error: error.message || 'Failed to create user' });
+  }
+});
+
+app.put('/api/users/:uid', requireSuperAdmin, async (req, res) => {
+  try {
+    const updated = await updateUser(req.params.uid, req.body);
+    res.json({ success: true, user: updated });
+  } catch (error) {
+    console.error('[API] Error updating user:', error);
+    res.status(500).json({ error: error.message || 'Failed to update user' });
   }
 });
 
@@ -173,7 +256,9 @@ app.delete('/api/users/:uid', requireSuperAdmin, async (req, res) => {
 
 app.get('/api/users/me', requireAuth, async (req, res) => {
   try {
-    res.json({ role: req.userRole });
+    const userEmail = req.headers['x-user-email'];
+    const permissions = await getUserPermissions(req.userId, userEmail);
+    res.json({ role: req.userRole, permissions });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch role' });
   }
@@ -282,7 +367,7 @@ app.post('/api/sessions/logout', requireAuth, async (req, res) => {
 });
 
 // Async Message Queue Endpoints (Immediate 202 Accepted for 20-30 concurrent users)
-app.post('/api/send-message', requireAuth, async (req, res) => {
+const handleSendMessage = async (req, res) => {
   try {
     const { to, message } = req.body;
     if (!to || !message) {
@@ -299,33 +384,18 @@ app.post('/api/send-message', requireAuth, async (req, res) => {
     console.error(`[SendMessage] Error for user ${req.userId}:`, error.message);
     res.status(500).json({ error: error.message || 'Failed to enqueue message' });
   }
-});
+};
 
-app.post('/api/messages/send', requireAuth, async (req, res) => {
-  try {
-    const { to, message } = req.body;
-    if (!to || !message) {
-      return res.status(400).json({ error: 'Missing to or message' });
-    }
-    const result = enqueueMessage({
-      userId: req.userId,
-      to,
-      message,
-      priority: 'high'
-    });
-    res.status(202).json(result);
-  } catch (error) {
-    console.error(`[MessagesSend] Error for user ${req.userId}:`, error.message);
-    res.status(500).json({ error: error.message || 'Failed to enqueue message' });
-  }
-});
+app.post('/api/send-message', requireAuth, requireSinglePermission, handleSendMessage);
+app.post('/api/messages/send', requireAuth, requireSinglePermission, handleSendMessage);
+app.post('/api/messages/single', requireAuth, requireSinglePermission, handleSendMessage);
 
 app.get('/api/queue/stats', requireAuth, (req, res) => {
   res.json(getQueueStats());
 });
 
 // Campaign Engine Endpoints
-app.post('/api/campaigns/create', requireAuth, async (req, res) => {
+const handleCreateCampaign = async (req, res) => {
   try {
     const { name, items, delaySeconds, messageTemplate } = req.body;
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -348,7 +418,10 @@ app.post('/api/campaigns/create', requireAuth, async (req, res) => {
     console.error('[API] Create campaign error:', error);
     res.status(500).json({ error: error.message || 'Failed to create campaign' });
   }
-});
+};
+
+app.post('/api/campaigns/create', requireAuth, requireBulkPermission, handleCreateCampaign);
+app.post('/api/broadcast/start', requireAuth, requireBulkPermission, handleCreateCampaign);
 
 app.post('/api/campaigns/:id/pause', requireAuth, async (req, res) => {
   try {

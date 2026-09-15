@@ -27,9 +27,18 @@ const getSessionUser = () => {
   }
 };
 
-function PrivateRoute({ children, allowedRoles }: { children: ReactNode, allowedRoles?: string[] }) {
+function PrivateRoute({ 
+  children, 
+  allowedRoles,
+  requiredPermission
+}: { 
+  children: ReactNode; 
+  allowedRoles?: string[];
+  requiredPermission?: 'canSendSingle' | 'canSendBulk';
+}) {
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<string | null>(null);
+  const [permissions, setPermissions] = useState<{ canSendSingle?: boolean; canSendBulk?: boolean } | null>(null);
   const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
@@ -37,6 +46,10 @@ function PrivateRoute({ children, allowedRoles }: { children: ReactNode, allowed
     setUser(sessionUser);
     if (sessionUser) {
       setUserRole(sessionUser.role);
+      setPermissions(sessionUser.permissions || {
+        canSendSingle: sessionUser.role === 'Super Admin' ? true : true,
+        canSendBulk: sessionUser.role === 'Super Admin'
+      });
     }
     setLoading(false);
   }, []);
@@ -53,13 +66,25 @@ function PrivateRoute({ children, allowedRoles }: { children: ReactNode, allowed
     return <Navigate to="/login" replace />;
   }
 
-  if (allowedRoles && userRole && !allowedRoles.includes(userRole)) {
-    return <Navigate to="/" replace />;
+  const isSuper = userRole === 'Super Admin';
+
+  if (!isSuper) {
+    if (allowedRoles && userRole && !allowedRoles.includes(userRole)) {
+      return <Navigate to="/" replace />;
+    }
+
+    if (requiredPermission === 'canSendSingle' && permissions?.canSendSingle === false) {
+      return <Navigate to="/" replace />;
+    }
+
+    if (requiredPermission === 'canSendBulk' && !permissions?.canSendBulk) {
+      return <Navigate to="/" replace />;
+    }
   }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col font-sans">
-      <Navbar userRole={userRole || 'Agent'} />
+      <Navbar userRole={userRole || 'Agent'} permissions={permissions || undefined} />
       <main className="flex-grow p-6 lg:p-10 flex flex-col">
         {children}
       </main>
@@ -88,25 +113,31 @@ export default function App() {
               } 
             />
           
-          {/* Single Messaging - All Roles */}
-          <Route 
-            path="/single" 
-            element={
-              <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}>
-                <SingleMessage />
-              </PrivateRoute>
-            } 
-          />
-          
-          {/* Bulk Broadcast Campaign - Super Admin, Manager, Team Leader */}
-          <Route 
-            path="/bulk" 
-            element={
-              <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
-                <BulkBroadcast />
-              </PrivateRoute>
-            } 
-          />
+            {/* Single Messaging - Enforces canSendSingle Permission */}
+            <Route 
+              path="/single" 
+              element={
+                <PrivateRoute 
+                  allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}
+                  requiredPermission="canSendSingle"
+                >
+                  <SingleMessage />
+                </PrivateRoute>
+              } 
+            />
+            
+            {/* Bulk Broadcast Campaign - Enforces canSendBulk Permission */}
+            <Route 
+              path="/bulk" 
+              element={
+                <PrivateRoute 
+                  allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}
+                  requiredPermission="canSendBulk"
+                >
+                  <BulkBroadcast />
+                </PrivateRoute>
+              } 
+            />
           
           {/* User Management - Super Admin Only */}
           <Route 
