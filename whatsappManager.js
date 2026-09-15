@@ -258,60 +258,87 @@ export async function getSessionStatus(userId) {
 }
 
 /**
- * POST /api/session/start
- * Purely triggers a fresh Baileys socket initialization and returns a new QR Code immediately.
+ * Core WhatsApp Session Starter and Manager
+ * Handles:
+ * 1. Disconnect Code 515 (Restart Required) - Automatically reconnects using updated creds without destroying session.
+ * 2. Disconnect Code 401 (Logged Out) - Wipes local auth files and sets state to DISCONNECTED.
+ * 3. Browser User-Agent and Version Emulation - Uses ['MFF WhatsApp', 'Chrome', '120.0.0'] and fetchLatestBaileysVersion().
+ * 4. QR Code Lifecycle - Keeps QR code valid until connection reaches 'open' or unrecoverable 401.
  */
-export async function startFreshSession(userId) {
+export async function startWhatsAppSession(userId, options = {}) {
   ensureSessionsDir();
+  const { forceFresh = false, isRestart = false, maxWaitMs = 15000 } = options;
 
-  // 1. Terminate existing socket and active session cleanly
-  const existing = activeSessions.get(userId);
-  if (existing) {
-    if (existing.reconnectTimer) clearTimeout(existing.reconnectTimer);
-    if (existing.stuckTimer) clearTimeout(existing.stuckTimer);
+  let sessionEntry = activeSessions.get(userId);
+
+  if (isRestart && sessionEntry) {
+    // Reconnecting after code 515 restartRequired
+    console.log(`[WhatsApp] Executing clean socket restart (code 515) for ${userId}...`);
     try {
-      existing.sock?.ws?.close();
+      sessionEntry.sock?.ws?.close();
     } catch (e) {}
-    activeSessions.delete(userId);
+    sessionEntry.sock = null;
+    sessionEntry.status = 'connecting';
+    // Preserve existing qrBase64 during 515 restart so UI doesn't flicker
+  } else {
+    // Terminate existing socket if any
+    if (sessionEntry) {
+      if (sessionEntry.reconnectTimer) clearTimeout(sessionEntry.reconnectTimer);
+      if (sessionEntry.stuckTimer) clearTimeout(sessionEntry.stuckTimer);
+      try {
+        sessionEntry.sock?.ws?.close();
+      } catch (e) {}
+      activeSessions.delete(userId);
+    }
+
+    if (forceFresh) {
+      // Clear local auth folder so a fresh QR is generated
+      const localDir = path.join(SESSIONS_DIR, userId);
+      try {
+        await rimraf(localDir);
+        fs.mkdirSync(localDir, { recursive: true });
+      } catch (e) {}
+
+      // Clear remote creds in Firestore
+      const db = getDb();
+      if (db) {
+        try {
+          await db.collection('whatsapp_sessions').doc(userId).set({
+            creds: null,
+            status: 'disconnected',
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        } catch (e) {}
+      }
+    }
+
+    sessionEntry = {
+      sock: null,
+      status: 'connecting',
+      qrBase64: null,
+      reconnectAttempts: 0,
+      maxReconnectAttempts: 1,
+      stuckTimer: null,
+      reconnectTimer: null
+    };
+    activeSessions.set(userId, sessionEntry);
   }
 
-  // 2. Clear local auth files for this user so a new QR is guaranteed
-  const localDir = path.join(SESSIONS_DIR, userId);
+  // Load auth state: fresh if forceFresh, else latest saved from memory/disk/Firestore
+  const { state, saveCreds } = await useFirestoreAuthState(userId, forceFresh);
+
+  // Fetch latest WhatsApp Web version with safe fallback
+  let version;
   try {
-    await rimraf(localDir);
-    fs.mkdirSync(localDir, { recursive: true });
-  } catch (e) {}
-
-  // 3. Clear remote creds in Firestore so Baileys does not auto-resume old session
-  const db = getDb();
-  if (db) {
-    try {
-      await db.collection('whatsapp_sessions').doc(userId).set({
-        creds: null,
-        status: 'disconnected',
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
-    } catch (e) {}
+    const versionData = await fetchLatestBaileysVersion();
+    version = versionData.version;
+  } catch (e) {
+    version = [2, 3000, 1015901307];
   }
-
-  const { state, saveCreds } = await useFirestoreAuthState(userId, true);
-  const { version } = await fetchLatestBaileysVersion();
-
-  const sessionEntry = {
-    sock: null,
-    status: 'connecting',
-    qrBase64: null,
-    reconnectAttempts: 0,
-    maxReconnectAttempts: 1,
-    stuckTimer: null,
-    reconnectTimer: null
-  };
-  activeSessions.set(userId, sessionEntry);
 
   return new Promise((resolve, reject) => {
     let resolved = false;
 
-    // Safety timeout: if no QR or connection within 15 seconds, resolve with status
     const safetyTimeout = setTimeout(() => {
       if (!resolved) {
         resolved = true;
@@ -320,18 +347,20 @@ export async function startFreshSession(userId) {
           qr: sessionEntry.qrBase64 || null
         });
       }
-    }, 15000);
+    }, maxWaitMs);
 
     try {
+      // Browser User-Agent & Version Emulation
       const sock = makeWASocket({
         version,
+        browser: ['MFF WhatsApp', 'Chrome', '120.0.0'],
         auth: state,
         printQRInTerminal: false,
         logger,
         syncFullHistory: false,
-        connectTimeoutMs: 15000,
+        connectTimeoutMs: 20000,
         keepAliveIntervalMs: 20000,
-        defaultQueryTimeoutMs: 15000
+        defaultQueryTimeoutMs: 20000
       });
 
       sessionEntry.sock = sock;
@@ -341,12 +370,13 @@ export async function startFreshSession(userId) {
       sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
+        // 3. QR Code Lifecycle: Keep QR active until 'open' or unrecoverable 401
         if (qr) {
           try {
             const qrBase64 = await QRCode.toDataURL(qr);
             sessionEntry.status = 'qr';
             sessionEntry.qrBase64 = qrBase64;
-            console.log(`[WhatsApp Start] Fresh QR code generated successfully for ${userId}`);
+            console.log(`[WhatsApp] QR code generated successfully for user ${userId}`);
 
             if (!resolved) {
               resolved = true;
@@ -354,16 +384,23 @@ export async function startFreshSession(userId) {
               resolve({ status: 'qr', qr: qrBase64 });
             }
           } catch (err) {
-            console.error('[WhatsApp Start] QR Code Generation Error:', err);
+            console.error('[WhatsApp] QR Code Generation Error:', err);
           }
         }
 
+        // Connection reaches 'open' status
         if (connection === 'open') {
-          console.log(`[WhatsApp Start] Connected successfully for ${userId}`);
+          console.log(`[WhatsApp] Connected successfully for user ${userId}`);
           sessionEntry.status = 'connected';
-          sessionEntry.qrBase64 = null;
+          sessionEntry.qrBase64 = null; // Clear QR only once connection explicitly reaches 'open'
           sessionEntry.reconnectAttempts = 0;
 
+          if (sessionEntry.stuckTimer) {
+            clearTimeout(sessionEntry.stuckTimer);
+            sessionEntry.stuckTimer = null;
+          }
+
+          const db = getDb();
           if (db) {
             db.collection('whatsapp_sessions').doc(userId).set({
               status: 'active',
@@ -378,16 +415,78 @@ export async function startFreshSession(userId) {
           }
         }
 
+        // Connection closes
         if (connection === 'close') {
-          const statusCode = lastDisconnect?.error?.output?.statusCode;
-          console.log(`[WhatsApp Start] Socket closed for ${userId}. Code: ${statusCode}`);
-          sessionEntry.status = 'disconnected';
+          const error = lastDisconnect?.error;
+          const statusCode = error?.output?.statusCode || error?.output?.payload?.statusCode;
+          console.log(`[WhatsApp] Socket connection closed for user ${userId}. StatusCode: ${statusCode}`);
+
+          // 1. Handle Disconnect Code 515 (Restart Required)
+          if (statusCode === 515 || statusCode === DisconnectReason.restartRequired) {
+            console.log(`[WhatsApp] Disconnect code 515 (restartRequired) encountered for ${userId}. Triggering clean socket reconnection...`);
+            // DO NOT destroy the session or mark as failed
+            // Automatically trigger a clean socket reconnection using newly generated auth credentials in memory/disk:
+            sessionEntry.status = 'connecting';
+            startWhatsAppSession(userId, { isRestart: true }).then((res) => {
+              if (!resolved && res?.status === 'connected') {
+                resolved = true;
+                clearTimeout(safetyTimeout);
+                resolve(res);
+              }
+            }).catch((err) => {
+              console.error(`[WhatsApp] Error during 515 restart reconnection for ${userId}:`, err);
+            });
+            return;
+          }
+
+          // 2. Handle Disconnect Reason Logged Out (401)
+          if (statusCode === 401 || statusCode === DisconnectReason.loggedOut) {
+            console.log(`[WhatsApp] Logged out (code 401) for ${userId}. Clearing session auth directory and setting state to DISCONNECTED.`);
+            
+            // Clear the session auth directory
+            const localDir = path.join(SESSIONS_DIR, userId);
+            try {
+              await rimraf(localDir);
+            } catch (e) {}
+
+            const db = getDb();
+            if (db) {
+              try {
+                await db.collection('whatsapp_sessions').doc(userId).set({
+                  status: 'disconnected',
+                  creds: null,
+                  updatedAt: new Date().toISOString()
+                }, { merge: true });
+              } catch (e) {}
+            }
+
+            sessionEntry.status = 'disconnected';
+            sessionEntry.qrBase64 = null;
+            sessionEntry.sock = null;
+
+            if (!resolved) {
+              resolved = true;
+              clearTimeout(safetyTimeout);
+              resolve({ status: 'disconnected', error: 'Logged out (401)' });
+            }
+            return;
+          }
+
+          // Other closures
           sessionEntry.sock = null;
+          // Keep QR code if it was active and not logged out
+          if (sessionEntry.status !== 'qr') {
+            sessionEntry.status = 'disconnected';
+          }
 
           if (!resolved) {
             resolved = true;
             clearTimeout(safetyTimeout);
-            resolve({ status: 'disconnected', error: 'Connection closed' });
+            resolve({
+              status: sessionEntry.status || 'disconnected',
+              qr: sessionEntry.qrBase64 || null,
+              error: `Socket closed (${statusCode})`
+            });
           }
         }
       });
@@ -412,6 +511,14 @@ export async function startFreshSession(userId) {
       reject(err);
     }
   });
+}
+
+/**
+ * POST /api/session/start
+ * Purely triggers a fresh Baileys socket initialization and returns a new QR Code immediately.
+ */
+export async function startFreshSession(userId) {
+  return await startWhatsAppSession(userId, { forceFresh: true });
 }
 
 /**
@@ -442,7 +549,7 @@ export async function manualReconnectSession(userId) {
   // If no saved session exists, generate a fresh QR code immediately
   if (!hasSaved) {
     console.log(`[WhatsApp Reconnect] No saved auth found for ${userId}. Falling back to fresh QR immediately.`);
-    const fresh = await startFreshSession(userId);
+    const fresh = await startWhatsAppSession(userId, { forceFresh: true });
     return {
       status: fresh.status || 'qr',
       qr: fresh.qr || null,
@@ -474,7 +581,14 @@ export async function manualReconnectSession(userId) {
   activeSessions.set(userId, sessionEntry);
 
   const { state, saveCreds } = await useFirestoreAuthState(userId, false);
-  const { version } = await fetchLatestBaileysVersion();
+
+  let version;
+  try {
+    const versionData = await fetchLatestBaileysVersion();
+    version = versionData.version;
+  } catch (e) {
+    version = [2, 3000, 1015901307];
+  }
 
   return new Promise((resolve) => {
     let resolved = false;
@@ -498,7 +612,7 @@ export async function manualReconnectSession(userId) {
 
       // Fallback to fresh QR code
       try {
-        const freshRes = await startFreshSession(userId);
+        const freshRes = await startWhatsAppSession(userId, { forceFresh: true });
         resolve({
           status: freshRes.status || 'qr',
           qr: freshRes.qr || null,
@@ -522,6 +636,7 @@ export async function manualReconnectSession(userId) {
     try {
       const sock = makeWASocket({
         version,
+        browser: ['MFF WhatsApp', 'Chrome', '120.0.0'],
         auth: state,
         printQRInTerminal: false,
         logger,
@@ -561,6 +676,7 @@ export async function manualReconnectSession(userId) {
           sessionEntry.qrBase64 = null;
           sessionEntry.reconnectAttempts = 0;
 
+          const db = getDb();
           if (db) {
             db.collection('whatsapp_sessions').doc(userId).set({
               status: 'active',
@@ -575,7 +691,23 @@ export async function manualReconnectSession(userId) {
         }
 
         if (connection === 'close') {
-          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          const error = lastDisconnect?.error;
+          const statusCode = error?.output?.statusCode || error?.output?.payload?.statusCode;
+
+          // Handle 515 in reconnect flow as well
+          if (statusCode === 515 || statusCode === DisconnectReason.restartRequired) {
+            console.log(`[WhatsApp Reconnect] Code 515 restartRequired encountered for ${userId}. Reconnecting cleanly...`);
+            sessionEntry.status = 'connecting';
+            startWhatsAppSession(userId, { isRestart: true }).then((res) => {
+              if (!resolved && res?.status === 'connected') {
+                resolved = true;
+                if (sessionEntry.stuckTimer) clearTimeout(sessionEntry.stuckTimer);
+                resolve(res);
+              }
+            }).catch(() => {});
+            return;
+          }
+
           fallbackToFreshQR(`socket closed with status ${statusCode}`);
         }
       });
