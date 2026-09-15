@@ -16,6 +16,7 @@ export const activeUserStatuses = new Map(); // userId -> { status, phone, qr }
 
 // Backward compatibility alias
 export const activeSessions = activeSockets;
+export { activeCampaigns } from './campaignManager.js';
 
 function ensureSessionsDir() {
   if (!fs.existsSync(SESSIONS_DIR)) {

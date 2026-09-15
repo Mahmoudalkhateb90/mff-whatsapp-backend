@@ -7,10 +7,13 @@ import {
 } from './messageQueue.js';
 
 // In-memory runtime tracking for active broadcast queues per user
-const activeCampaignQueues = new Map();
+export const activeCampaigns = new Map(); // campaignId -> campaignObject
+
+// Backward-compatibility alias
+export const activeCampaignQueues = activeCampaigns;
 
 /**
- * Saves or updates campaign document in Firestore
+ * Saves or updates campaign document in Firestore (strictly non-blocking fire-and-forget)
  */
 async function syncCampaignToFirestore(campaign) {
   try {
@@ -34,12 +37,13 @@ async function syncCampaignToFirestore(campaign) {
       ...(campaign.createdAt ? {} : { createdAt: nowIso })
     }, { merge: true });
   } catch (error) {
-    console.warn(`[Campaign] Firestore sync failed for ${campaign.id}:`, error.message);
+    // Non-blocking warning - never throw
+    console.warn(`[Campaign] Firestore sync notice for ${campaign.id}:`, error.message);
   }
 }
 
 /**
- * Creates and starts a new campaign for a specific user.
+ * Creates and starts a new campaign for a specific user strictly in-memory.
  * Dispatches items to the Centralized Message Queue to prevent socket locking.
  */
 export async function createCampaign({ name, items, delaySeconds, messageTemplate, userId }) {
@@ -86,12 +90,17 @@ export async function createCampaign({ name, items, delaySeconds, messageTemplat
     messageTemplate: templateStr,
     userId: userId,
     errorMessage: null,
+    isPaused: false,
+    isCancelled: false,
     items: normalizedItems,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
 
-  activeCampaignQueues.set(campaignId, campaign);
-  await syncCampaignToFirestore(campaign);
+  activeCampaigns.set(campaignId, campaign);
+
+  // Non-blocking fire-and-forget sync to Firestore
+  syncCampaignToFirestore(campaign).catch(() => {});
 
   // Enqueue campaign items into Centralized Thread-Safe Async Message Queue
   enqueueCampaignItems({
@@ -100,7 +109,7 @@ export async function createCampaign({ name, items, delaySeconds, messageTemplat
     items: normalizedItems,
     throttleDelayMs: throttleSec * 1000,
     onItemProcessed: async ({ success, err }) => {
-      if (campaign.status === 'cancelled') return;
+      if (campaign.isCancelled || campaign.status === 'cancelled') return;
 
       if (success) {
         campaign.sentCount++;
@@ -112,6 +121,7 @@ export async function createCampaign({ name, items, delaySeconds, messageTemplat
         }
       }
       campaign.currentIndex++;
+      campaign.updatedAt = new Date().toISOString();
 
       if (campaign.currentIndex >= campaign.totalRecords) {
         if (campaign.status !== 'failed') {
@@ -120,7 +130,7 @@ export async function createCampaign({ name, items, delaySeconds, messageTemplat
         console.log(`[Campaign ${campaignId}] Finished with status ${campaign.status}. Sent: ${campaign.sentCount}, Failed: ${campaign.failedCount}`);
       }
 
-      await syncCampaignToFirestore(campaign);
+      syncCampaignToFirestore(campaign).catch(() => {});
     }
   });
 
@@ -132,100 +142,165 @@ export async function createCampaign({ name, items, delaySeconds, messageTemplat
     sentCount: campaign.sentCount,
     failedCount: campaign.failedCount,
     delaySeconds: campaign.delaySeconds,
-    userId: campaign.userId
+    userId: campaign.userId,
+    isPaused: campaign.isPaused,
+    isCancelled: campaign.isCancelled
   };
 }
 
 /**
  * Pauses a running campaign
  */
-export async function pauseCampaign(campaignId) {
-  let campaign = activeCampaignQueues.get(campaignId);
+export async function pauseCampaign(campaignId, userId = null) {
+  let targetId = campaignId;
+  let campaign = activeCampaigns.get(targetId);
 
-  pauseCampaignInQueue(campaignId);
-
-  if (!campaign) {
-    const database = getDb();
-    if (database) {
-      const doc = await database.collection('campaigns').doc(campaignId).get();
-      if (doc.exists) {
-        await database.collection('campaigns').doc(campaignId).update({
-          status: 'paused',
-          updatedAt: new Date().toISOString()
-        });
-        return { success: true, status: 'paused', id: campaignId };
+  // If passed userId instead of campaignId, find their active campaign
+  if (!campaign && userId) {
+    for (const c of activeCampaigns.values()) {
+      if (c.userId === userId && c.status === 'running') {
+        campaign = c;
+        targetId = c.id;
+        break;
       }
     }
-    throw new Error('Campaign not found');
   }
 
-  campaign.status = 'paused';
-  await syncCampaignToFirestore(campaign);
-  return { success: true, status: 'paused', id: campaignId };
+  if (campaign) {
+    campaign.status = 'paused';
+    campaign.isPaused = true;
+    campaign.updatedAt = new Date().toISOString();
+    pauseCampaignInQueue(targetId);
+    syncCampaignToFirestore(campaign).catch(() => {});
+    return { success: true, status: 'paused', id: targetId, ...campaign };
+  }
+
+  pauseCampaignInQueue(targetId);
+  return { success: true, status: 'paused', id: targetId };
 }
 
 /**
  * Resumes a paused campaign
  */
-export async function resumeCampaign(campaignId) {
-  let campaign = activeCampaignQueues.get(campaignId);
+export async function resumeCampaign(campaignId, userId = null) {
+  let targetId = campaignId;
+  let campaign = activeCampaigns.get(targetId);
 
-  resumeCampaignInQueue(campaignId);
-
-  if (!campaign) {
-    const database = getDb();
-    if (database) {
-      const doc = await database.collection('campaigns').doc(campaignId).get();
-      if (doc.exists) {
-        await database.collection('campaigns').doc(campaignId).update({
-          status: 'running',
-          updatedAt: new Date().toISOString()
-        });
-        return { success: true, status: 'running', id: campaignId };
+  // If passed userId instead of campaignId, find their paused campaign
+  if (!campaign && userId) {
+    for (const c of activeCampaigns.values()) {
+      if (c.userId === userId && c.status === 'paused') {
+        campaign = c;
+        targetId = c.id;
+        break;
       }
     }
-    throw new Error('Campaign not found');
   }
 
-  campaign.status = 'running';
-  await syncCampaignToFirestore(campaign);
-  return { success: true, status: 'running', id: campaignId };
+  if (campaign) {
+    campaign.status = 'running';
+    campaign.isPaused = false;
+    campaign.updatedAt = new Date().toISOString();
+    resumeCampaignInQueue(targetId);
+    syncCampaignToFirestore(campaign).catch(() => {});
+    return { success: true, status: 'running', id: targetId, ...campaign };
+  }
+
+  resumeCampaignInQueue(targetId);
+  return { success: true, status: 'running', id: targetId };
 }
 
 /**
- * Cancels a campaign and purges pending queue items
+ * Cancels / Stops a campaign in-memory instantly and purges pending queue items
  */
-export async function cancelCampaign(campaignId) {
-  cancelCampaignInQueue(campaignId);
+export async function cancelCampaign(campaignId, userId = null) {
+  let targetId = campaignId;
+  let campaign = activeCampaigns.get(targetId);
 
-  let campaign = activeCampaignQueues.get(campaignId);
+  if (!campaign && userId) {
+    for (const c of activeCampaigns.values()) {
+      if (c.userId === userId && (c.status === 'running' || c.status === 'paused')) {
+        campaign = c;
+        targetId = c.id;
+        break;
+      }
+    }
+  }
+
+  cancelCampaignInQueue(targetId);
+
   if (campaign) {
     campaign.status = 'cancelled';
-    await syncCampaignToFirestore(campaign);
-    activeCampaignQueues.delete(campaignId);
-    return { success: true, status: 'cancelled', id: campaignId };
+    campaign.isCancelled = true;
+    campaign.updatedAt = new Date().toISOString();
+    syncCampaignToFirestore(campaign).catch(() => {});
+    return { success: true, status: 'cancelled', id: targetId, ...campaign };
   }
 
-  const database = getDb();
-  if (database) {
-    await database.collection('campaigns').doc(campaignId).update({
-      status: 'cancelled',
-      updatedAt: new Date().toISOString()
-    }).catch(() => {});
+  return { success: true, status: 'cancelled', id: targetId };
+}
+
+// Alias for stop campaign
+export const stopCampaign = cancelCampaign;
+
+/**
+ * Gets campaign status strictly from in-memory activeCampaigns map
+ */
+export async function getBroadcastStatus(userId, campaignId = null) {
+  if (campaignId && activeCampaigns.has(campaignId)) {
+    const c = activeCampaigns.get(campaignId);
+    return {
+      id: c.id,
+      name: c.name,
+      status: c.status,
+      totalRecords: c.totalRecords,
+      sentCount: c.sentCount,
+      failedCount: c.failedCount,
+      currentIndex: c.currentIndex,
+      delaySeconds: c.delaySeconds,
+      messageTemplate: c.messageTemplate,
+      errorMessage: c.errorMessage || null,
+      isPaused: c.isPaused,
+      isCancelled: c.isCancelled,
+      userId: c.userId
+    };
   }
 
-  return { success: true, status: 'cancelled', id: campaignId };
+  if (userId) {
+    // Look up most recent campaign for this user in memory
+    for (const c of Array.from(activeCampaigns.values()).reverse()) {
+      if (c.userId === userId) {
+        return {
+          id: c.id,
+          name: c.name,
+          status: c.status,
+          totalRecords: c.totalRecords,
+          sentCount: c.sentCount,
+          failedCount: c.failedCount,
+          currentIndex: c.currentIndex,
+          delaySeconds: c.delaySeconds,
+          messageTemplate: c.messageTemplate,
+          errorMessage: c.errorMessage || null,
+          isPaused: c.isPaused,
+          isCancelled: c.isCancelled,
+          userId: c.userId
+        };
+      }
+    }
+  }
+
+  return { status: 'idle' };
 }
 
 /**
  * Gets the most recent active (running or paused) campaign strictly isolated per user.
- * Decouples sessions so User A does not overwrite or view User B's campaign state.
+ * Returns strictly from memory map first to prevent Firestore quota exhaustion.
  */
 export async function getActiveCampaign(userId) {
   if (!userId) return null;
 
   // 1. Check in-memory first for latest runtime status strictly matching userId
-  for (const campaign of activeCampaignQueues.values()) {
+  for (const campaign of Array.from(activeCampaigns.values()).reverse()) {
     if (campaign.userId === userId && (campaign.status === 'running' || campaign.status === 'paused')) {
       return {
         id: campaign.id,
@@ -238,28 +313,32 @@ export async function getActiveCampaign(userId) {
         delaySeconds: campaign.delaySeconds,
         messageTemplate: campaign.messageTemplate,
         errorMessage: campaign.errorMessage || null,
+        isPaused: campaign.isPaused,
+        isCancelled: campaign.isCancelled,
         userId: campaign.userId
       };
     }
   }
 
-  // 2. Check Firestore fallback strictly filtered by userId
-  try {
-    const database = getDb();
-    if (!database) return null;
-
-    const snap = await database.collection('campaigns')
-      .where('userId', '==', userId)
-      .where('status', 'in', ['running', 'paused'])
-      .limit(1)
-      .get();
-
-    if (!snap.empty) {
-      const doc = snap.docs[0];
-      return { id: doc.id, ...doc.data() };
+  // 2. Fallback check for last completed/failed campaign for this user
+  for (const campaign of Array.from(activeCampaigns.values()).reverse()) {
+    if (campaign.userId === userId) {
+      return {
+        id: campaign.id,
+        name: campaign.name,
+        status: campaign.status,
+        totalRecords: campaign.totalRecords,
+        sentCount: campaign.sentCount,
+        failedCount: campaign.failedCount,
+        currentIndex: campaign.currentIndex,
+        delaySeconds: campaign.delaySeconds,
+        messageTemplate: campaign.messageTemplate,
+        errorMessage: campaign.errorMessage || null,
+        isPaused: campaign.isPaused,
+        isCancelled: campaign.isCancelled,
+        userId: campaign.userId
+      };
     }
-  } catch (error) {
-    console.warn(`[Campaign] Firestore active query warning for user ${userId}:`, error.message);
   }
 
   return null;

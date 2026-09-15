@@ -28,7 +28,16 @@ import {
   getDb, 
   getAnalyticsMetrics 
 } from './firestoreService.js';
-import { createCampaign, pauseCampaign, resumeCampaign, cancelCampaign, getActiveCampaign } from './campaignManager.js';
+import { 
+  createCampaign, 
+  pauseCampaign, 
+  resumeCampaign, 
+  cancelCampaign, 
+  stopCampaign,
+  getBroadcastStatus, 
+  getActiveCampaign,
+  activeCampaigns 
+} from './campaignManager.js';
 import { enqueueMessage, getQueueStats } from './messageQueue.js';
 
 const app = express();
@@ -438,33 +447,61 @@ const handleCreateCampaign = async (req, res) => {
 app.post('/api/campaigns/create', requireAuth, requireBulkPermission, handleCreateCampaign);
 app.post('/api/broadcast/start', requireAuth, requireBulkPermission, handleCreateCampaign);
 
-app.post('/api/campaigns/:id/pause', requireAuth, async (req, res) => {
+// Stop / Cancel endpoints (Purely In-Memory instant halt)
+const handleStopCampaign = async (req, res) => {
   try {
-    const result = await pauseCampaign(req.params.id);
+    const campaignId = req.params.id || req.body?.campaignId || req.body?.id;
+    const result = await stopCampaign(campaignId, req.userId);
+    res.json(result);
+  } catch (error) {
+    console.error('[API] Stop campaign error:', error);
+    res.status(500).json({ error: error.message || 'Failed to stop campaign' });
+  }
+};
+
+app.post('/api/broadcast/stop', requireAuth, handleStopCampaign);
+app.post('/api/broadcast/cancel', requireAuth, handleStopCampaign);
+app.post('/api/campaigns/:id/cancel', requireAuth, handleStopCampaign);
+
+// Pause endpoints
+const handlePauseCampaign = async (req, res) => {
+  try {
+    const campaignId = req.params.id || req.body?.campaignId || req.body?.id;
+    const result = await pauseCampaign(campaignId, req.userId);
     res.json(result);
   } catch (error) {
     console.error('[API] Pause campaign error:', error);
     res.status(500).json({ error: error.message || 'Failed to pause campaign' });
   }
-});
+};
 
-app.post('/api/campaigns/:id/resume', requireAuth, async (req, res) => {
+app.post('/api/broadcast/pause', requireAuth, handlePauseCampaign);
+app.post('/api/campaigns/:id/pause', requireAuth, handlePauseCampaign);
+
+// Resume endpoints
+const handleResumeCampaign = async (req, res) => {
   try {
-    const result = await resumeCampaign(req.params.id);
+    const campaignId = req.params.id || req.body?.campaignId || req.body?.id;
+    const result = await resumeCampaign(campaignId, req.userId);
     res.json(result);
   } catch (error) {
     console.error('[API] Resume campaign error:', error);
     res.status(500).json({ error: error.message || 'Failed to resume campaign' });
   }
-});
+};
 
-app.post('/api/campaigns/:id/cancel', requireAuth, async (req, res) => {
+app.post('/api/broadcast/resume', requireAuth, handleResumeCampaign);
+app.post('/api/campaigns/:id/resume', requireAuth, handleResumeCampaign);
+
+// Status endpoints (Purely In-Memory)
+app.get('/api/broadcast/status', requireAuth, async (req, res) => {
   try {
-    const result = await cancelCampaign(req.params.id);
-    res.json(result);
+    const campaignId = req.query.campaignId || req.query.id;
+    const status = await getBroadcastStatus(req.userId, campaignId);
+    res.json(status);
   } catch (error) {
-    console.error('[API] Cancel campaign error:', error);
-    res.status(500).json({ error: error.message || 'Failed to cancel campaign' });
+    console.error('[API] Get broadcast status error:', error);
+    res.status(500).json({ error: error.message || 'Failed to get broadcast status' });
   }
 });
 
