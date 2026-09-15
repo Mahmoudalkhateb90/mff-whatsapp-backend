@@ -4,13 +4,13 @@ import { API_BASE_URL } from '../config';
 interface SessionContextType {
   status: string;
   qrBase64: string | null;
+  phone: string | null;
   loading: boolean;
-  actionLoading: 'start' | 'reconnect' | 'reset' | null;
-  hasSavedSession: boolean;
+  actionLoading: 'start' | 'disconnect' | null;
   startSession: () => Promise<void>;
-  reconnectSession: () => Promise<void>;
-  logoutSession: () => Promise<void>;
+  disconnectSession: () => Promise<void>;
   resetSession: () => Promise<void>;
+  logoutSession: () => Promise<void>;
   checkStatus: () => Promise<void>;
 }
 
@@ -19,9 +19,9 @@ const SessionContext = createContext<SessionContextType | undefined>(undefined);
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<string>('disconnected');
   const [qrBase64, setQrBase64] = useState<string | null>(null);
+  const [phone, setPhone] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState<'start' | 'reconnect' | 'reset' | null>(null);
-  const [hasSavedSession, setHasSavedSession] = useState<boolean>(false);
+  const [actionLoading, setActionLoading] = useState<'start' | 'disconnect' | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -53,10 +53,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         setStatus(data.status || 'disconnected');
-        setHasSavedSession(!!data.hasSavedSession);
+        if (data.phone) {
+          setPhone(data.phone);
+        }
         if (data.qr) {
           setQrBase64(data.qr);
-        } else if (data.status === 'connected' || data.status === 'disconnected' || data.status === 'idle') {
+        } else if (data.status === 'connected' || data.status === 'disconnected') {
           setQrBase64(null);
         }
       }
@@ -68,14 +70,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (userId) {
       checkStatus();
-      const interval = setInterval(checkStatus, 3000);
+      const interval = setInterval(checkStatus, 2500);
       return () => clearInterval(interval);
     }
   }, [userId]);
 
   /**
    * POST /api/session/start
-   * Triggers a fresh Baileys socket initialization and gets a new QR code immediately.
+   * Triggers a fresh Baileys socket initialization strictly for this user and gets a new QR code immediately.
    */
   const startSession = async () => {
     if (!userId) return;
@@ -98,6 +100,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       } else if (data.status) {
         setStatus(data.status);
       }
+      if (data.phone) {
+        setPhone(data.phone);
+      }
     } catch (err) {
       console.error('[SessionContext] startSession error:', err);
     } finally {
@@ -107,52 +112,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   };
 
   /**
-   * POST /api/session/reconnect
-   * Manually attempts ONE-TIME reconnection using saved auth files.
-   * If it fails, falls back to disconnected and outputs a fresh QR code.
+   * POST /api/session/disconnect
+   * Closes user's socket, wipes their auth storage, and sets status to disconnected.
    */
-  const reconnectSession = async () => {
+  const disconnectSession = async () => {
     if (!userId) return;
     setLoading(true);
-    setActionLoading('reconnect');
+    setActionLoading('disconnect');
     try {
-      const res = await fetch(`${API_BASE_URL}/api/session/reconnect`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-user-id': userId
-        },
-        body: JSON.stringify({ userId }),
-      });
-      const data = await res.json();
-      if (data.status === 'connected') {
-        setStatus('connected');
-        setQrBase64(null);
-      } else if (data.qr) {
-        setStatus('qr');
-        setQrBase64(data.qr);
-      } else if (data.status) {
-        setStatus(data.status);
-      }
-    } catch (err) {
-      console.error('[SessionContext] reconnectSession error:', err);
-      setStatus('disconnected');
-    } finally {
-      setLoading(false);
-      setActionLoading(null);
-    }
-  };
-
-  /**
-   * POST /api/session/reset
-   * Completely deletes local auth folders and resets socket state to IDLE.
-   */
-  const resetSession = async () => {
-    if (!userId) return;
-    setLoading(true);
-    setActionLoading('reset');
-    try {
-      await fetch(`${API_BASE_URL}/api/session/reset`, {
+      await fetch(`${API_BASE_URL}/api/session/disconnect`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -160,28 +128,29 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         },
         body: JSON.stringify({ userId })
       });
-      setStatus('idle');
+      setStatus('disconnected');
       setQrBase64(null);
-      setHasSavedSession(false);
+      setPhone(null);
     } catch (err) {
-      console.error('[SessionContext] resetSession error:', err);
+      console.error('[SessionContext] disconnectSession error:', err);
     } finally {
       setLoading(false);
       setActionLoading(null);
     }
   };
 
-  const logoutSession = resetSession;
+  const resetSession = disconnectSession;
+  const logoutSession = disconnectSession;
 
   return (
     <SessionContext.Provider value={{ 
       status, 
       qrBase64, 
+      phone,
       loading, 
       actionLoading,
-      hasSavedSession, 
       startSession, 
-      reconnectSession, 
+      disconnectSession,
       logoutSession, 
       resetSession, 
       checkStatus 

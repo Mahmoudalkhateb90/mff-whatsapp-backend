@@ -1,8 +1,8 @@
 import { getDb } from './firestoreService.js';
 import { 
   sendWhatsAppMessageDirect, 
-  isWhatsAppConnectingOrInitializing, 
-  hasAnyConnectedSession 
+  isUserConnecting,
+  isUserConnected 
 } from './whatsappManager.js';
 
 /**
@@ -147,10 +147,10 @@ async function runWorker() {
         continue;
       }
 
-      // Graceful Queue Session Handling: If WhatsApp socket is temporarily reconnecting or initializing,
-      // pause queue worker for 3 seconds instead of failing messages.
-      if (isWhatsAppConnectingOrInitializing() && !hasAnyConnectedSession()) {
-        console.log(`[MessageQueue] WhatsApp socket is temporarily reconnecting/initializing. Pausing queue worker for 3 seconds...`);
+      // Graceful Queue Session Handling: If this user's WhatsApp socket is temporarily connecting or restarting,
+      // pause queue worker for 3 seconds instead of failing messages immediately.
+      if (item.userId && isUserConnecting(item.userId) && !isUserConnected(item.userId)) {
+        console.log(`[MessageQueue] WhatsApp socket for user ${item.userId} is connecting. Pausing queue worker for 3 seconds...`);
         if (type === 'single') {
           highPriorityQueue.unshift(item);
         } else if (campaignQueue) {
@@ -192,19 +192,17 @@ async function runWorker() {
         }
       } catch (err) {
         // If error occurred because socket was reconnecting, put item back and pause 3s
-        if (isWhatsAppConnectingOrInitializing() || err?.message?.includes('WhatsApp session is not connected')) {
-          if (isWhatsAppConnectingOrInitializing()) {
-            console.log(`[MessageQueue] Socket is reconnecting. Re-queuing ${item.to} and pausing for 3 seconds...`);
-            item.status = 'queued';
-            if (type === 'single') {
-              highPriorityQueue.unshift(item);
-            } else if (campaignQueue) {
-              campaignQueue.items.unshift(item);
-              refreshRoundRobinKeys();
-            }
-            await new Promise(r => setTimeout(r, 3000));
-            continue;
+        if (item.userId && isUserConnecting(item.userId)) {
+          console.log(`[MessageQueue] Socket for user ${item.userId} is connecting. Re-queuing ${item.to} and pausing 3s...`);
+          item.status = 'queued';
+          if (type === 'single') {
+            highPriorityQueue.unshift(item);
+          } else if (campaignQueue) {
+            campaignQueue.items.unshift(item);
+            refreshRoundRobinKeys();
           }
+          await new Promise(r => setTimeout(r, 3000));
+          continue;
         }
 
         console.error(`[MessageQueue] Delivery failure to ${item.to}:`, err?.message || err);

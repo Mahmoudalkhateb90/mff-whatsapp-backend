@@ -6,7 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import { 
   startWhatsAppSession,
   startFreshSession, 
-  manualReconnectSession, 
+  disconnectWhatsAppSession,
   resetSession, 
   startSession, 
   getSessionStatus, 
@@ -264,7 +264,7 @@ app.get('/api/users/me', requireAuth, async (req, res) => {
   }
 });
 
-// Explicit WhatsApp Session Control Endpoints
+// Explicit Per-User WhatsApp Session Control Endpoints
 app.post('/api/session/start', requireAuth, async (req, res) => {
   const userId = req.body?.userId || req.userId;
   if (!userId || (userId !== req.userId && req.userRole !== 'Super Admin')) {
@@ -280,18 +280,18 @@ app.post('/api/session/start', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/session/reconnect', requireAuth, async (req, res) => {
+app.post('/api/session/disconnect', requireAuth, async (req, res) => {
   const userId = req.body?.userId || req.userId;
   if (!userId || (userId !== req.userId && req.userRole !== 'Super Admin')) {
-    return res.status(403).json({ error: 'You can only reconnect your own session' });
+    return res.status(403).json({ error: 'You can only disconnect your own session' });
   }
 
   try {
-    const result = await manualReconnectSession(userId);
+    const result = await disconnectWhatsAppSession(userId);
     res.json(result);
   } catch (error) {
-    console.error(`[ManualReconnect] Error for user ${userId}:`, error);
-    res.status(500).json({ error: 'Failed to reconnect session', message: error.message });
+    console.error(`[DisconnectSession] Error for user ${userId}:`, error);
+    res.status(500).json({ error: 'Failed to disconnect session', message: error.message });
   }
 });
 
@@ -302,7 +302,7 @@ app.post('/api/session/reset', requireAuth, async (req, res) => {
   }
 
   try {
-    const result = await resetSession(userId);
+    const result = await disconnectWhatsAppSession(userId);
     res.json(result);
   } catch (error) {
     console.error(`[ResetSession] Error for user ${userId}:`, error);
@@ -344,7 +344,7 @@ app.get('/api/sessions/status/:userId', requireAuth, async (req, res) => {
   
   try {
     const status = await getSessionStatus(userId);
-    res.json({ status });
+    res.json(status);
   } catch (error) {
     console.error(`[SessionStatus] Error for user ${userId}:`, error);
     res.status(500).json({ error: 'Failed to get session status' });
@@ -358,7 +358,7 @@ app.post('/api/sessions/logout', requireAuth, async (req, res) => {
   }
 
   try {
-    const result = await resetSession(userId);
+    const result = await disconnectWhatsAppSession(userId);
     res.json(result);
   } catch (error) {
     console.error(`[LogoutSession] Error for user ${userId}:`, error);
