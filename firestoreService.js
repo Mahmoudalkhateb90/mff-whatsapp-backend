@@ -190,45 +190,18 @@ export async function getAllUsers() {
   return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 }
 
-export async function authenticateUser(email, password) {
-  const database = getDb();
-  if (!database) throw new Error('Database not initialized');
-  const snapshot = await database.collection('users')
-    .where('email', '==', email)
-    .where('password', '==', password)
-    .where('status', '==', 'active')
-    .limit(1)
-    .get();
-    
-  if (snapshot.empty) {
-    throw new Error('Invalid credentials');
-  }
-  
-  const userDoc = snapshot.docs[0];
-  return { id: userDoc.id, ...userDoc.data() };
-}
-
 export async function createUser(data) {
+  const auth = getAuthAdmin();
   const database = getDb();
   
-  let uid = `user_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-  
-  // Create in Auth just in case, but rely on DB for our custom auth
-  try {
-    const auth = getAuthAdmin();
-    const userRecord = await auth.createUser({
-      email: data.email,
-      password: data.password,
-      displayName: data.displayName,
-    });
-    uid = userRecord.uid;
-  } catch (err) {
-    console.warn('[Firebase Auth] Could not create user in Auth, proceeding with DB only', err.message);
-  }
-
-  await database.collection('users').doc(uid).set({
+  const userRecord = await auth.createUser({
     email: data.email,
-    password: data.password, // Store in DB for direct login check
+    password: data.password,
+    displayName: data.displayName,
+  });
+
+  await database.collection('users').doc(userRecord.uid).set({
+    email: data.email,
     displayName: data.displayName,
     role: data.role || 'Agent',
     department: data.department || '',
@@ -236,20 +209,12 @@ export async function createUser(data) {
     status: 'active'
   });
 
-  return { id: uid, email: data.email, role: data.role, department: data.department };
+  return { id: userRecord.uid, email: data.email, role: data.role, department: data.department };
 }
 
 export async function resetUserPassword(uid, newPassword) {
-  const database = getDb();
-  
-  try {
-    const auth = getAuthAdmin();
-    await auth.updateUser(uid, { password: newPassword });
-  } catch (err) {
-    console.warn('[Firebase Auth] Could not update password in Auth, proceeding with DB only', err.message);
-  }
-  
-  await database.collection('users').doc(uid).set({ password: newPassword }, { merge: true });
+  const auth = getAuthAdmin();
+  await auth.updateUser(uid, { password: newPassword });
   return { success: true };
 }
 

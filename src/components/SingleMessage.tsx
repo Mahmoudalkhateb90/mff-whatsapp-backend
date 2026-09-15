@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Send, Loader2, MessageSquare } from 'lucide-react';
-
+import { auth } from '../firebase';
 import { API_BASE_URL } from '../config';
 
 export default function SingleMessage() {
@@ -20,10 +20,10 @@ export default function SingleMessage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': JSON.parse(localStorage.getItem("user_session") || "{}").id || ''
+          'x-user-id': auth.currentUser?.uid || ''
         },
         body: JSON.stringify({
-          userId: JSON.parse(localStorage.getItem("user_session") || "{}").id,
+          userId: auth.currentUser?.uid,
           to: `${formattedPhone}@s.whatsapp.net`,
           message
         })

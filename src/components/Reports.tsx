@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { BarChart3, Users, MessageSquare, Activity, ShieldAlert, Loader2 } from 'lucide-react';
-
+import { auth } from '../firebase';
 import { API_BASE_URL } from '../config';
 
 interface User {
@@ -20,8 +20,8 @@ export default function Reports() {
     const fetchReportData = async () => {
       try {
         const [meRes, usersRes] = await Promise.all([
-          fetch(`${API_BASE_URL}/api/users/me`, { headers: { 'x-user-id': JSON.parse(localStorage.getItem("user_session") || "{}").id || '' } }),
-          fetch(`${API_BASE_URL}/api/users`, { headers: { 'x-user-id': JSON.parse(localStorage.getItem("user_session") || "{}").id || '' } })
+          fetch(`${API_BASE_URL}/api/users/me`, { headers: { 'x-user-id': auth.currentUser?.uid || '' } }),
+          fetch(`${API_BASE_URL}/api/users`, { headers: { 'x-user-id': auth.currentUser?.uid || '' } })
         ]);
         
         if (meRes.ok) {

@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { auth } from '../firebase';
 import { API_BASE_URL } from '../config';
+import { onAuthStateChanged } from 'firebase/auth';
 
 interface SessionContextType {
   status: string;
@@ -20,15 +22,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    const sessionStr = localStorage.getItem('user_session');
-    if (sessionStr) {
-      try {
-        const session = JSON.parse(sessionStr);
-        setUserId(session.id || null);
-      } catch (e) {}
-    } else {
-      setUserId(null);
-    }
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUserId(user?.uid || null);
+    });
+    return () => unsubscribe();
   }, []);
 
   const checkStatus = async () => {
