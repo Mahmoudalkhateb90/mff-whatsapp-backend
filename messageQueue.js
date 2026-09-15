@@ -2,7 +2,8 @@ import { getDb } from './firestoreService.js';
 import { 
   sendWhatsAppMessageDirect, 
   isUserConnecting,
-  isUserConnected 
+  isUserConnected,
+  activeSockets
 } from './whatsappManager.js';
 
 /**
@@ -136,6 +137,7 @@ async function runWorker() {
       }
 
       const { item, type, campaignQueue } = next;
+      const targetUserId = item.userId || campaignQueue?.userId;
 
       // Skip cancelled items
       if (item.isCancelled || (campaignQueue && campaignQueue.isCancelled)) {
@@ -147,10 +149,13 @@ async function runWorker() {
         continue;
       }
 
+      // Explicit socket check for the user
+      const userSock = activeSockets.get(targetUserId);
+
       // Graceful Queue Session Handling: If this user's WhatsApp socket is temporarily connecting or restarting,
       // pause queue worker for 3 seconds instead of failing messages immediately.
-      if (item.userId && isUserConnecting(item.userId) && !isUserConnected(item.userId)) {
-        console.log(`[MessageQueue] WhatsApp socket for user ${item.userId} is connecting. Pausing queue worker for 3 seconds...`);
+      if (targetUserId && isUserConnecting(targetUserId) && (!userSock || userSock.status !== 'connected')) {
+        console.log(`[MessageQueue] WhatsApp socket for user ${targetUserId} is connecting. Pausing queue worker for 3 seconds...`);
         if (type === 'single') {
           highPriorityQueue.unshift(item);
         } else if (campaignQueue) {
@@ -158,6 +163,57 @@ async function runWorker() {
           refreshRoundRobinKeys();
         }
         await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+
+      // If user socket is null/undefined or disconnected:
+      if (!userSock || !userSock.sock || userSock.status !== 'connected') {
+        const errorMsg = 'FAILED: WhatsApp session disconnected for this user';
+        console.warn(`[MessageQueue] Socket not connected for user ${targetUserId}. Failing message to ${item.to}...`);
+
+        item.status = 'failed';
+        item.error = errorMsg;
+
+        // Log error to Firestore
+        logMessageDelivery({
+          userId: targetUserId,
+          phone: item.to,
+          status: 'failed',
+          campaignId: item.campaignId,
+          errorMessage: item.error
+        }).catch(() => {});
+
+        if (item.onFailure) {
+          try { item.onFailure(item, new Error(errorMsg)); } catch (e) {}
+        }
+        if (item.reject) {
+          try { item.reject(new Error(errorMsg)); } catch (e) {}
+        }
+
+        // If this is a bulk campaign, fail all remaining items in this campaign queue immediately so it doesn't freeze at 0%
+        if (campaignQueue && campaignQueue.items.length > 0) {
+          console.warn(`[MessageQueue] Failing remaining ${campaignQueue.items.length} items for campaign ${campaignQueue.campaignId} due to disconnected session.`);
+          const remainingItems = [...campaignQueue.items];
+          campaignQueue.items = [];
+          bulkCampaignQueues.delete(campaignQueue.campaignId);
+          refreshRoundRobinKeys();
+
+          for (const remItem of remainingItems) {
+            remItem.status = 'failed';
+            remItem.error = errorMsg;
+            logMessageDelivery({
+              userId: targetUserId,
+              phone: remItem.to,
+              status: 'failed',
+              campaignId: remItem.campaignId,
+              errorMessage: errorMsg
+            }).catch(() => {});
+            if (remItem.onFailure) {
+              try { remItem.onFailure(remItem, new Error(errorMsg)); } catch (e) {}
+            }
+          }
+        }
+
         continue;
       }
 
@@ -169,16 +225,20 @@ async function runWorker() {
           throw new Error(`Invalid recipient phone number (${item.to})`);
         }
 
-        console.log(`[MessageQueue] Dispatching [${type.toUpperCase()}] message to ${cleanPhone} (User: ${item.userId}, Campaign: ${item.campaignId || 'Direct'})...`);
+        if (!item.message || typeof item.message !== 'string' || !item.message.trim()) {
+          throw new Error('Message text cannot be empty or undefined');
+        }
+
+        console.log(`[MessageQueue] Dispatching [${type.toUpperCase()}] message to ${cleanPhone} (User: ${targetUserId}, Campaign: ${item.campaignId || 'Direct'})...`);
         
-        const result = await sendWhatsAppMessageDirect(item.userId, cleanPhone, item.message);
+        const result = await sendWhatsAppMessageDirect(targetUserId, cleanPhone, item.message);
 
         item.status = 'sent';
         item.messageId = result?.messageId || `msg_${Date.now()}`;
 
         // Asynchronous Firestore delivery log (non-blocking)
         logMessageDelivery({
-          userId: item.userId,
+          userId: targetUserId,
           phone: cleanPhone,
           status: 'sent',
           campaignId: item.campaignId
@@ -192,8 +252,8 @@ async function runWorker() {
         }
       } catch (err) {
         // If error occurred because socket was reconnecting, put item back and pause 3s
-        if (item.userId && isUserConnecting(item.userId)) {
-          console.log(`[MessageQueue] Socket for user ${item.userId} is connecting. Re-queuing ${item.to} and pausing 3s...`);
+        if (targetUserId && isUserConnecting(targetUserId)) {
+          console.log(`[MessageQueue] Socket for user ${targetUserId} is connecting. Re-queuing ${item.to} and pausing 3s...`);
           item.status = 'queued';
           if (type === 'single') {
             highPriorityQueue.unshift(item);
@@ -211,7 +271,7 @@ async function runWorker() {
 
         // Log error to Firestore
         logMessageDelivery({
-          userId: item.userId,
+          userId: targetUserId,
           phone: item.to,
           status: 'failed',
           campaignId: item.campaignId,

@@ -406,15 +406,22 @@ app.get('/api/queue/stats', requireAuth, (req, res) => {
 const handleCreateCampaign = async (req, res) => {
   try {
     const { name, items, delaySeconds, messageTemplate } = req.body;
+    const targetUserId = req.userId || req.body?.userId || req.headers['x-user-id'];
+
+    if (!targetUserId) {
+      return res.status(401).json({ error: 'Unauthorized: Missing user ID' });
+    }
+
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'At least one contact item is required' });
     }
+
     const campaign = await createCampaign({
       name,
       items,
       delaySeconds,
       messageTemplate,
-      userId: req.userId
+      userId: targetUserId
     });
     // Immediately respond with 202 Accepted to prevent UI lag or freeze
     res.status(202).json({

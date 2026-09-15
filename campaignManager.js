@@ -28,7 +28,8 @@ async function syncCampaignToFirestore(campaign) {
       currentIndex: campaign.currentIndex,
       delaySeconds: campaign.delaySeconds,
       userId: campaign.userId,
-      messageTemplate: campaign.messageTemplate,
+      messageTemplate: campaign.messageTemplate || '',
+      errorMessage: campaign.errorMessage || null,
       updatedAt: nowIso,
       ...(campaign.createdAt ? {} : { createdAt: nowIso })
     }, { merge: true });
@@ -42,18 +43,36 @@ async function syncCampaignToFirestore(campaign) {
  * Dispatches items to the Centralized Message Queue to prevent socket locking.
  */
 export async function createCampaign({ name, items, delaySeconds, messageTemplate, userId }) {
-  if (!items || items.length === 0) {
+  if (!userId) {
+    throw new Error('User ID is required to create a campaign');
+  }
+
+  if (!items || !Array.isArray(items) || items.length === 0) {
     throw new Error('At least one recipient is required');
   }
 
   const campaignId = 'camp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
   const throttleSec = parseInt(delaySeconds, 10) || 3;
+  const templateStr = typeof messageTemplate === 'string' ? messageTemplate.trim() : '';
 
-  // Prepare normalized items list
-  const normalizedItems = items.map(item => ({
-    phone: item.phone,
-    message: item.message || messageTemplate
-  }));
+  // Prepare normalized items list: extract row.message or fallback to messageTemplate
+  const normalizedItems = [];
+  for (const item of items) {
+    const rawPhone = (item.phone || '').replace(/\D/g, '');
+    const rowMsg = typeof item.message === 'string' ? item.message.trim() : '';
+    const finalMsg = rowMsg || templateStr;
+
+    if (rawPhone.length >= 7 && finalMsg.length > 0) {
+      normalizedItems.push({
+        phone: rawPhone,
+        message: finalMsg
+      });
+    }
+  }
+
+  if (normalizedItems.length === 0) {
+    throw new Error('No valid recipients with message content found. Please provide valid phone numbers and message text.');
+  }
 
   const campaign = {
     id: campaignId,
@@ -64,8 +83,9 @@ export async function createCampaign({ name, items, delaySeconds, messageTemplat
     failedCount: 0,
     currentIndex: 0,
     delaySeconds: throttleSec,
-    messageTemplate: messageTemplate || '',
-    userId: userId || 'system',
+    messageTemplate: templateStr,
+    userId: userId,
+    errorMessage: null,
     items: normalizedItems,
     createdAt: new Date().toISOString()
   };
@@ -86,12 +106,18 @@ export async function createCampaign({ name, items, delaySeconds, messageTemplat
         campaign.sentCount++;
       } else {
         campaign.failedCount++;
+        if (err?.message && err.message.includes('WhatsApp session disconnected')) {
+          campaign.status = 'failed';
+          campaign.errorMessage = 'FAILED: WhatsApp session disconnected for this user';
+        }
       }
       campaign.currentIndex++;
 
       if (campaign.currentIndex >= campaign.totalRecords) {
-        campaign.status = 'completed';
-        console.log(`[Campaign ${campaignId}] Completed. Sent: ${campaign.sentCount}, Failed: ${campaign.failedCount}`);
+        if (campaign.status !== 'failed') {
+          campaign.status = 'completed';
+        }
+        console.log(`[Campaign ${campaignId}] Finished with status ${campaign.status}. Sent: ${campaign.sentCount}, Failed: ${campaign.failedCount}`);
       }
 
       await syncCampaignToFirestore(campaign);
@@ -105,7 +131,8 @@ export async function createCampaign({ name, items, delaySeconds, messageTemplat
     totalRecords: campaign.totalRecords,
     sentCount: campaign.sentCount,
     failedCount: campaign.failedCount,
-    delaySeconds: campaign.delaySeconds
+    delaySeconds: campaign.delaySeconds,
+    userId: campaign.userId
   };
 }
 
@@ -209,7 +236,9 @@ export async function getActiveCampaign(userId) {
         failedCount: campaign.failedCount,
         currentIndex: campaign.currentIndex,
         delaySeconds: campaign.delaySeconds,
-        messageTemplate: campaign.messageTemplate
+        messageTemplate: campaign.messageTemplate,
+        errorMessage: campaign.errorMessage || null,
+        userId: campaign.userId
       };
     }
   }

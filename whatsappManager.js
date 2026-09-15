@@ -415,11 +415,16 @@ export async function sendWhatsAppMessageDirect(userId, to, message) {
     throw new Error(`WhatsApp session not connected for this user (${userId})`);
   }
 
+  if (message === undefined || message === null || typeof message !== 'string' || !message.trim()) {
+    throw new Error('Message text cannot be empty or undefined');
+  }
+
   try {
     const formattedPhone = to.replace(/[^0-9]/g, '');
     const jid = `${formattedPhone}@s.whatsapp.net`;
+    const textToSend = message.trim();
 
-    const result = await session.sock.sendMessage(jid, { text: message });
+    const result = await session.sock.sendMessage(jid, { text: textToSend });
     return { success: true, messageId: result.key?.id };
   } catch (err) {
     console.error(`[WhatsApp] Send message error for user ${userId} to ${to}:`, err?.message || err);

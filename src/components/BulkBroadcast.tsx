@@ -33,13 +33,15 @@ interface ContactItem {
 interface ActiveCampaignState {
   id: string;
   name: string;
-  status: 'running' | 'paused' | 'completed' | 'cancelled' | 'idle';
+  status: 'running' | 'paused' | 'completed' | 'cancelled' | 'failed' | 'idle';
   totalRecords: number;
   sentCount: number;
   failedCount: number;
   currentIndex?: number;
   delaySeconds?: number;
   messageTemplate?: string;
+  errorMessage?: string;
+  userId?: string;
 }
 
 export default function BulkBroadcast() {
@@ -323,14 +325,15 @@ export default function BulkBroadcast() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': user.id || '',
+          'x-user-id': user.id || userId,
           'x-user-email': user.email || ''
         },
         body: JSON.stringify({
           name: campaignName.trim() || `Campaign ${new Date().toLocaleDateString()}`,
           items: itemsToBroadcast,
           delaySeconds: parseInt(throttleDelay, 10) || 3,
-          messageTemplate
+          messageTemplate: messageTemplate || '',
+          userId: user.id || userId
         })
       });
 
@@ -339,7 +342,14 @@ export default function BulkBroadcast() {
         // Reset dismissed flag so the new campaign progress is tracked
         dismissedCampaignIdRef.current = null;
         setActiveCampaign(campaign);
-        setStatusMessage({ type: 'success', text: 'Campaign queued and running sequentially in background!' });
+        if (campaign.status === 'failed') {
+          setStatusMessage({ 
+            type: 'error', 
+            text: campaign.errorMessage || 'FAILED: WhatsApp session disconnected for this user' 
+          });
+        } else {
+          setStatusMessage({ type: 'success', text: 'Campaign queued and running sequentially in background!' });
+        }
       } else {
         const err = await res.json().catch(() => ({ error: 'Failed to start campaign' }));
         setStatusMessage({ type: 'error', text: err.error || 'Failed to start campaign' });
@@ -635,6 +645,19 @@ export default function BulkBroadcast() {
               }`}>
                 {statusMessage.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
                 <span>{statusMessage.text}</span>
+              </div>
+            )}
+
+            {/* Failed Campaign Alert */}
+            {activeCampaign && activeCampaign.status === 'failed' && (
+              <div className="mb-6 p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl">
+                <div className="flex items-start gap-2 text-rose-400 font-semibold text-sm mb-1">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>Campaign Failed</span>
+                </div>
+                <p className="text-xs text-rose-300">
+                  {activeCampaign.errorMessage || 'WhatsApp session is disconnected for your user account. Please connect your WhatsApp device to start broadcasting.'}
+                </p>
               </div>
             )}
 
