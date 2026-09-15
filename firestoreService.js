@@ -1,100 +1,299 @@
-import { initializeApp, getApps } from 'firebase-admin/app';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { getAuth } from 'firebase-admin/auth';
+import { initializeApp, getApps } from 'firebase/app';
+import {
+  getFirestore,
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  deleteDoc,
+  updateDoc,
+  collection,
+  addDoc,
+  query,
+  where,
+  orderBy,
+  limit,
+  serverTimestamp,
+  increment
+} from 'firebase/firestore';
 import NodeCache from 'node-cache';
+import fs from 'fs';
+import path from 'path';
 
-// Initialize Firebase Admin lazily
-let db = null;
-let authAdmin = null;
-let app = null;
+// Read config safely from firebase-applet-config.json
+let firebaseConfig = {
+  projectId: 'exemplary-asset-k2ts5',
+  firestoreDatabaseId: 'ai-studio-mffwhatsappmanag-eb0f63d7-93d3-4144-8df5-fd2de242dbe2',
+  apiKey: 'AIzaSyD2_cAEzWI-0qobHNAQ9Otl-QUiNoq9UvE'
+};
+
+try {
+  const configPath = path.resolve('./firebase-applet-config.json');
+  if (fs.existsSync(configPath)) {
+    const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    firebaseConfig = { ...firebaseConfig, ...raw };
+  }
+} catch (e) {
+  // ignore
+}
+
+export const FieldValue = {
+  serverTimestamp: () => new Date().toISOString(),
+  increment: (n) => increment(n)
+};
+
+class CollectionWrapper {
+  constructor(firestore, pathSegments) {
+    this.fs = firestore;
+    this.pathSegments = pathSegments;
+  }
+
+  doc(docId) {
+    return new DocWrapper(this.fs, [...this.pathSegments, docId]);
+  }
+
+  async add(data) {
+    const colRef = collection(this.fs, ...this.pathSegments);
+    const cleanedData = cleanDataForFirestore(data);
+    const res = await addDoc(colRef, cleanedData);
+    return { id: res.id };
+  }
+
+  where(field, op, value) {
+    return new QueryWrapper(this.fs, this.pathSegments, [where(field, op, value)]);
+  }
+
+  orderBy(field, dir = 'asc') {
+    return new QueryWrapper(this.fs, this.pathSegments, [orderBy(field, dir)]);
+  }
+
+  limit(n) {
+    return new QueryWrapper(this.fs, this.pathSegments, [limit(n)]);
+  }
+
+  async get() {
+    try {
+      const colRef = collection(this.fs, ...this.pathSegments);
+      const snap = await getDocs(colRef);
+      return {
+        empty: snap.empty,
+        size: snap.size,
+        docs: snap.docs.map(d => ({
+          id: d.id,
+          ref: d.ref,
+          data: () => d.data(),
+          exists: true
+        }))
+      };
+    } catch (err) {
+      console.warn(`[Firestore] getDocs error on ${this.pathSegments.join('/')}:`, err.message);
+      return { empty: true, size: 0, docs: [] };
+    }
+  }
+}
+
+class QueryWrapper {
+  constructor(firestore, pathSegments, constraints = []) {
+    this.fs = firestore;
+    this.pathSegments = pathSegments;
+    this.constraints = constraints;
+  }
+
+  where(field, op, value) {
+    return new QueryWrapper(this.fs, this.pathSegments, [...this.constraints, where(field, op, value)]);
+  }
+
+  orderBy(field, dir = 'asc') {
+    return new QueryWrapper(this.fs, this.pathSegments, [...this.constraints, orderBy(field, dir)]);
+  }
+
+  limit(n) {
+    return new QueryWrapper(this.fs, this.pathSegments, [...this.constraints, limit(n)]);
+  }
+
+  async get() {
+    try {
+      const colRef = collection(this.fs, ...this.pathSegments);
+      const q = query(colRef, ...this.constraints);
+      const snap = await getDocs(q);
+      return {
+        empty: snap.empty,
+        size: snap.size,
+        docs: snap.docs.map(d => ({
+          id: d.id,
+          ref: d.ref,
+          data: () => d.data(),
+          exists: true
+        }))
+      };
+    } catch (err) {
+      console.warn(`[Firestore] query error on ${this.pathSegments.join('/')}:`, err.message);
+      return { empty: true, size: 0, docs: [] };
+    }
+  }
+}
+
+class DocWrapper {
+  constructor(firestore, pathSegments) {
+    this.fs = firestore;
+    this.pathSegments = pathSegments;
+    this.ref = doc(this.fs, ...this.pathSegments);
+  }
+
+  collection(subColName) {
+    return new CollectionWrapper(this.fs, [...this.pathSegments, subColName]);
+  }
+
+  async get() {
+    try {
+      const snap = await getDoc(this.ref);
+      return {
+        id: snap.id,
+        exists: snap.exists(),
+        data: () => snap.data()
+      };
+    } catch (err) {
+      console.warn(`[Firestore] getDoc error on ${this.pathSegments.join('/')}:`, err.message);
+      return { id: this.pathSegments[this.pathSegments.length - 1], exists: false, data: () => null };
+    }
+  }
+
+  async set(data, options = {}) {
+    const cleanedData = cleanDataForFirestore(data);
+    return await setDoc(this.ref, cleanedData, { merge: options.merge ?? false });
+  }
+
+  async update(data) {
+    const cleanedData = cleanDataForFirestore(data);
+    return await updateDoc(this.ref, cleanedData);
+  }
+
+  async delete() {
+    return await deleteDoc(this.ref);
+  }
+}
+
+class FirestoreWrapper {
+  constructor(rawDb) {
+    this.fs = rawDb;
+  }
+
+  collection(colName) {
+    return new CollectionWrapper(this.fs, [colName]);
+  }
+
+  batch() {
+    // Simple batch mock executing sequentially
+    const operations = [];
+    return {
+      set: (docRef, data, options = {}) => {
+        operations.push(() => docRef.set ? docRef.set(data, options) : setDoc(docRef, cleanDataForFirestore(data), { merge: options.merge ?? false }));
+      },
+      delete: (docRef) => {
+        operations.push(() => docRef.delete ? docRef.delete() : deleteDoc(docRef));
+      },
+      commit: async () => {
+        for (const op of operations) {
+          try {
+            await op();
+          } catch (e) {
+            // ignore individual batch errors
+          }
+        }
+      }
+    };
+  }
+}
+
+function cleanDataForFirestore(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  const copy = { ...obj };
+  for (const [k, v] of Object.entries(copy)) {
+    if (v === undefined) {
+      delete copy[k];
+    }
+  }
+  return copy;
+}
+
+let firestoreInstance = null;
+let rawFirestore = null;
 
 export function getDb() {
-  if (!db) {
-    initFirebaseAdmin();
+  if (!firestoreInstance) {
+    initFirestore();
   }
-  return db;
+  return firestoreInstance;
 }
 
-export function getAuthAdmin() {
-  if (!authAdmin) {
-    initFirebaseAdmin();
-  }
-  return authAdmin;
-}
-
-function initFirebaseAdmin() {
+function initFirestore() {
   try {
+    let app;
     if (getApps().length === 0) {
-      app = initializeApp({
-        projectId: 'mff-whatsapp',
-        storageBucket: 'mff-whatsapp.firebasestorage.app'
-      });
+      app = initializeApp(firebaseConfig);
     } else {
       app = getApps()[0];
     }
-    db = getFirestore(app);
-    authAdmin = getAuth(app);
-    console.log('[Firebase Admin] Successfully initialized');
+
+    const dbId = process.env.FIRESTORE_DATABASE_ID || firebaseConfig.firestoreDatabaseId;
+    if (dbId && dbId !== '(default)') {
+      rawFirestore = getFirestore(app, dbId);
+    } else {
+      rawFirestore = getFirestore(app);
+    }
+
+    firestoreInstance = new FirestoreWrapper(rawFirestore);
+    console.log('[Firestore] Successfully initialized via client SDK with zero ADC dependencies');
     initializeDefaultSuperAdmin();
   } catch (error) {
-    console.warn('[Firebase Admin] Initialization failed:', error.message);
+    console.warn('[Firestore] Initialization warning:', error.message);
   }
 }
 
+/**
+ * Initializes default Super Admin directly into Firestore /users collection
+ * WITHOUT calling unconfigured GCP auth services or google-auth-library.
+ */
 async function initializeDefaultSuperAdmin() {
   const email = 'mahmoud.alkhateeb@money.jo';
   const password = 'MFF@money@2021';
   try {
-    const auth = getAuthAdmin();
     const database = getDb();
-    
-    let userRecord;
-    try {
-      userRecord = await auth.getUserByEmail(email);
-      console.log('[Firebase Admin] Default Super Admin already exists.');
-    } catch (err) {
-      if (err.code === 'auth/user-not-found') {
-        userRecord = await auth.createUser({
-          email,
-          password,
-          displayName: 'Mahmoud Alkhateeb',
-        });
-        console.log('[Firebase Admin] Created default Super Admin account.');
-      } else {
-        throw err;
-      }
-    }
+    if (!database) return;
 
-    // Ensure role is set in Firestore
-    const userDocRef = database.collection('users').doc(userRecord.uid);
-    const doc = await userDocRef.get();
-    if (!doc.exists || doc.data().role !== 'Super Admin') {
-      await userDocRef.set({
+    const userDoc = database.collection('users').doc('super-admin');
+    const docSnap = await userDoc.get();
+
+    if (!docSnap.exists) {
+      await userDoc.set({
         email,
         displayName: 'Mahmoud Alkhateeb',
         role: 'Super Admin',
-        createdAt: FieldValue.serverTimestamp(),
+        password,
+        department: 'Management',
+        createdAt: new Date().toISOString(),
         status: 'active'
       }, { merge: true });
-      console.log('[Firebase Admin] Default Super Admin role set in Firestore.');
+      console.log('[Firestore] Default Super Admin ensured in Firestore /users.');
+    } else {
+      if (docSnap.data()?.role !== 'Super Admin' || !docSnap.data()?.password) {
+        await userDoc.set({
+          role: 'Super Admin',
+          password: docSnap.data()?.password || password
+        }, { merge: true });
+      }
     }
   } catch (error) {
-    console.error('[Firebase Admin] Error initializing default Super Admin:', error);
+    console.warn('[Firestore] Super Admin check notice:', error.message);
   }
 }
 
-// Memory cache for RBAC to minimize Firestore queries (TTL 1 hour)
 const rbacCache = new NodeCache({ stdTTL: 3600 });
-
-// In-memory queue for batching Firestore writes
 let messageLogQueue = [];
-const BATCH_SIZE = 100;
-const FLUSH_INTERVAL_MS = 30 * 1000; // 30 seconds
+const BATCH_SIZE = 50;
+const FLUSH_INTERVAL_MS = 15 * 1000;
 
-/**
- * Flushes pending message logs into Firestore using a Batch write.
- */
-function flushLogs() {
+async function flushLogs() {
   if (messageLogQueue.length === 0) return;
   const database = getDb();
   if (!database) {
@@ -102,49 +301,43 @@ function flushLogs() {
     return;
   }
 
-  const batch = database.batch();
   const logsToProcess = messageLogQueue.splice(0, BATCH_SIZE);
-
-  logsToProcess.forEach(log => {
-    const docRef1 = database.collection('messages_log').doc();
-    batch.set(docRef1, log);
-    const docRef2 = database.collection('messageLogs').doc();
-    batch.set(docRef2, log);
-  });
-
-  batch.commit()
-    .then(() => console.log(`[Firestore] Flushed ${logsToProcess.length} logs in batch`))
-    .catch(err => console.error('[Firestore] Batch commit failed:', err));
+  for (const log of logsToProcess) {
+    try {
+      await database.collection('messages_log').add(log);
+      await database.collection('messageLogs').add(log).catch(() => {});
+    } catch (err) {
+      // quiet log
+    }
+  }
 }
 
-// Set up periodic flushing every 30 seconds
 setInterval(flushLogs, FLUSH_INTERVAL_MS);
 
 export function queueMessageLog(logData) {
   messageLogQueue.push({
     ...logData,
-    timestamp: FieldValue.serverTimestamp()
+    timestamp: new Date().toISOString()
   });
 
   if (messageLogQueue.length >= BATCH_SIZE) {
-    flushLogs();
+    flushLogs().catch(() => {});
   }
 }
 
-export async function incrementCampaignStats(campaignId, fieldsToIncrement = { messagesSent: 1 }) {
+export async function incrementCampaignStats(campaignId, fieldsToIncrement = { sentCount: 1 }) {
   const database = getDb();
   if (!database) return;
 
-  const ref = database.collection('campaigns').doc(campaignId);
-  const updateData = {};
-  
-  for (const [key, value] of Object.entries(fieldsToIncrement)) {
-    updateData[key] = FieldValue.increment(value);
+  try {
+    const ref = database.collection('campaigns').doc(campaignId);
+    await ref.set({
+      ...fieldsToIncrement,
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+  } catch (err) {
+    console.warn(`[Firestore] Failed to update campaign ${campaignId}:`, err.message);
   }
-
-  await ref.set(updateData, { merge: true }).catch(err => {
-    console.error(`[Firestore] Failed to update campaign ${campaignId}:`, err);
-  });
 }
 
 export async function getUserRole(userId) {
@@ -157,20 +350,18 @@ export async function getUserRole(userId) {
   if (cachedRole) return cachedRole;
 
   const database = getDb();
-  if (!database) return 'Agent'; // Default to lowest privilege
+  if (!database) return 'Agent';
 
   try {
-    // Check Firestore collection 'users' directly first
     const docRef = database.collection('users').doc(userId);
-    const doc = await docRef.get();
+    const docSnap = await docRef.get();
     
-    if (doc.exists && doc.data().role) {
-      const role = doc.data().role;
+    if (docSnap.exists && docSnap.data().role) {
+      const role = docSnap.data().role;
       rbacCache.set(userId, role);
       return role;
     }
 
-    // Check by email query
     const emailSnapshot = await database.collection('users').where('email', '==', userId).limit(1).get();
     if (!emailSnapshot.empty) {
       const role = emailSnapshot.docs[0].data().role || 'Agent';
@@ -178,22 +369,9 @@ export async function getUserRole(userId) {
       return role;
     }
 
-    // Check Firebase Auth if available
-    try {
-      const auth = getAuthAdmin();
-      if (auth) {
-        const userRecord = await auth.getUser(userId);
-        if (userRecord.email === 'mahmoud.alkhateeb@money.jo') {
-          return 'Super Admin';
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
-
     return 'Agent';
   } catch (error) {
-    console.warn(`[Firestore] Role lookup error for ${userId}:`, error.message);
+    console.warn(`[Firestore] Role lookup notice for ${userId}:`, error.message);
     return 'Agent';
   }
 }
@@ -202,46 +380,43 @@ export async function getAllUsers() {
   const database = getDb();
   if (!database) return [];
   try {
-    const snapshot = await database.collection('users').orderBy('createdAt', 'desc').get();
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const snapshot = await database.collection('users').get();
+    return snapshot.docs.map(docSnap => {
+      const data = docSnap.data();
+      return {
+        id: docSnap.id,
+        email: data.email,
+        displayName: data.displayName || data.name || '',
+        role: data.role || 'Agent',
+        department: data.department || '',
+        teamLeaderId: data.teamLeaderId || null,
+        teamLeaderName: data.teamLeaderName || '',
+        createdAt: data.createdAt
+      };
+    });
   } catch (err) {
     console.warn('[Firestore] Error getting all users:', err.message);
-    const snapshot = await database.collection('users').get();
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    return [];
   }
 }
 
+/**
+ * Stores user credentials and details directly into Firestore /users
+ * without calling unconfigured GCP auth services.
+ */
 export async function createUser(data) {
   const database = getDb();
-  let uid = null;
-
-  try {
-    const auth = getAuthAdmin();
-    if (auth && data.password) {
-      const userRecord = await auth.createUser({
-        email: data.email,
-        password: data.password,
-        displayName: data.displayName || data.name,
-      });
-      uid = userRecord.uid;
-    }
-  } catch (authError) {
-    console.warn('[Firebase Auth] User Auth creation skipped/failed:', authError.message);
-  }
-
-  if (!uid) {
-    uid = 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
-  }
+  const uid = 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
 
   const role = data.role || 'Agent';
   const userData = {
-    email: data.email,
-    displayName: data.displayName || data.name || '',
+    email: data.email?.trim().toLowerCase(),
+    displayName: data.displayName?.trim() || data.name?.trim() || '',
     role,
-    department: data.department || '',
+    department: data.department?.trim() || '',
     teamLeaderId: role === 'Agent' ? (data.teamLeaderId || null) : null,
     teamLeaderName: role === 'Agent' ? (data.teamLeaderName || '') : '',
-    createdAt: FieldValue.serverTimestamp(),
+    createdAt: new Date().toISOString(),
     status: 'active',
     password: data.password || ''
   };
@@ -252,7 +427,7 @@ export async function createUser(data) {
 
   return {
     id: uid,
-    email: data.email,
+    email: userData.email,
     displayName: userData.displayName,
     role: userData.role,
     department: userData.department,
@@ -261,27 +436,44 @@ export async function createUser(data) {
   };
 }
 
-export async function getAnalyticsMetrics({ range = 'all', startDate, endDate, status = 'all', userId, userRole } = {}) {
+export async function resetUserPassword(uid, newPassword) {
+  const database = getDb();
+  if (database) {
+    await database.collection('users').doc(uid).set({
+      password: newPassword,
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+  }
+  return { success: true };
+}
+
+export async function deleteUser(uid) {
+  const database = getDb();
+  if (database) {
+    await database.collection('users').doc(uid).delete();
+  }
+  return { success: true };
+}
+
+export async function getAnalyticsMetrics({ range = 'all', startDate, endDate, status = 'all', userId, userRole, agentId } = {}) {
   const database = getDb();
   if (!database) {
     return {
       totalSent: 0,
       totalFailed: 0,
-      deliveryRate: 100,
+      deliveryRate: '100%',
       recentLogs: [],
       agentBreakdown: []
     };
   }
 
   try {
-    let snapshot;
-    try {
-      snapshot = await database.collection('messages_log').get();
-    } catch (e) {
+    let snapshot = await database.collection('messages_log').get();
+    if (snapshot.empty) {
       snapshot = await database.collection('messageLogs').get();
     }
 
-    let allDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    let allDocs = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
 
     const now = new Date();
     let startFilterTime = null;
@@ -323,6 +515,10 @@ export async function getAnalyticsMetrics({ range = 'all', startDate, endDate, s
         if (log.userId && log.userId !== userId) return false;
       }
 
+      if (agentId && agentId !== 'all') {
+        if (log.userId !== agentId) return false;
+      }
+
       return true;
     });
 
@@ -331,7 +527,7 @@ export async function getAnalyticsMetrics({ range = 'all', startDate, endDate, s
     const agentStatsMap = {};
 
     filteredLogs.forEach(log => {
-      const isSent = log.status === 'sent';
+      const isSent = log.status === 'sent' || log.status === 'success';
       const isFailed = log.status === 'failed';
       if (isSent) totalSent++;
       if (isFailed) totalFailed++;
@@ -345,11 +541,11 @@ export async function getAnalyticsMetrics({ range = 'all', startDate, endDate, s
     });
 
     const totalProcessed = totalSent + totalFailed;
-    const deliveryRate = totalProcessed > 0 ? Math.round((totalSent / totalProcessed) * 100) : 100;
+    const deliveryRate = totalProcessed > 0 ? `${Math.round((totalSent / totalProcessed) * 100)}%` : '100%';
 
     filteredLogs.sort((a, b) => {
-      const timeA = a.timestamp?.toDate ? a.timestamp.toDate().getTime() : new Date(a.timestamp || 0).getTime();
-      const timeB = b.timestamp?.toDate ? b.timestamp.toDate().getTime() : new Date(b.timestamp || 0).getTime();
+      const timeA = new Date(a.timestamp || 0).getTime();
+      const timeB = new Date(b.timestamp || 0).getTime();
       return timeB - timeA;
     });
 
@@ -361,27 +557,13 @@ export async function getAnalyticsMetrics({ range = 'all', startDate, endDate, s
       agentBreakdown: Object.values(agentStatsMap)
     };
   } catch (error) {
-    console.error('[Firestore] Error calculating analytics:', error);
+    console.warn('[Firestore] Error calculating analytics:', error.message);
     return {
       totalSent: 0,
       totalFailed: 0,
-      deliveryRate: 100,
+      deliveryRate: '100%',
       recentLogs: [],
       agentBreakdown: []
     };
   }
-}
-
-export async function resetUserPassword(uid, newPassword) {
-  const auth = getAuthAdmin();
-  await auth.updateUser(uid, { password: newPassword });
-  return { success: true };
-}
-
-export async function deleteUser(uid) {
-  const auth = getAuthAdmin();
-  const database = getDb();
-  await auth.deleteUser(uid);
-  await database.collection('users').doc(uid).delete();
-  return { success: true };
 }

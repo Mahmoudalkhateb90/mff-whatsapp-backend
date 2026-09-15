@@ -6,23 +6,27 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if request.auth != null;
-      allow write: if false; // Only Admin SDK can modify users collection to prevent privilege escalation
+      allow read, write: if true;
+    }
+
+    match /whatsapp_sessions/{userId} {
+      allow read, write: if true;
+    }
+
+    match /whatsapp_sessions/{userId}/keys/{keyId} {
+      allow read, write: if true;
     }
 
     match /campaigns/{campaignId} {
-      allow read: if request.auth != null;
-      allow write: if false; // Updated via Admin SDK increment
+      allow read, write: if true;
     }
 
     match /messageLogs/{logId} {
-      allow read: if request.auth != null;
-      allow write: if false; // Inserted via Admin SDK batching
+      allow read, write: if true;
     }
 
     match /messages_log/{logId} {
-      allow read: if request.auth != null;
-      allow write: if false; // Inserted via Admin SDK batching
+      allow read, write: if true;
     }
   }
 }

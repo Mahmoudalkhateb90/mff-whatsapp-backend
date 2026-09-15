@@ -1,6 +1,6 @@
 {
   "name": "MFF WhatsApp Manager",
-  "description": "Production-ready Node.js backend using Baileys to manage WhatsApp sessions, with Firestore cost optimizations.",
+  "description": "Enterprise WhatsApp session manager with Firestore remote auth store, bulk campaigns, and real-time delivery reports.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

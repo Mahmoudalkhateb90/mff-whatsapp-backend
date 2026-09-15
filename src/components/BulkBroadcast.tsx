@@ -22,12 +22,23 @@ interface ActiveCampaignState {
   messageTemplate?: string;
 }
 
+const STORAGE_KEY_NUMBERS = 'mff_broadcast_draft_numbers';
+const STORAGE_KEY_CONTACTS = 'mff_broadcast_draft_contacts';
+const STORAGE_KEY_NAME = 'mff_broadcast_draft_name';
+const STORAGE_KEY_TEMPLATE = 'mff_broadcast_draft_template';
+
 export default function BulkBroadcast() {
   const { t } = useLanguage();
-  const [campaignName, setCampaignName] = useState('');
-  const [numbersInput, setNumbersInput] = useState('');
-  const [parsedContacts, setParsedContacts] = useState<ContactItem[]>([]);
-  const [messageTemplate, setMessageTemplate] = useState('');
+  const [campaignName, setCampaignName] = useState(() => localStorage.getItem(STORAGE_KEY_NAME) || '');
+  const [numbersInput, setNumbersInput] = useState(() => localStorage.getItem(STORAGE_KEY_NUMBERS) || '');
+  const [parsedContacts, setParsedContacts] = useState<ContactItem[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY_CONTACTS) || '[]');
+    } catch {
+      return [];
+    }
+  });
+  const [messageTemplate, setMessageTemplate] = useState(() => localStorage.getItem(STORAGE_KEY_TEMPLATE) || '');
   const [throttleDelay, setThrottleDelay] = useState('5');
   const [submitting, setSubmitting] = useState(false);
   const [activeCampaign, setActiveCampaign] = useState<ActiveCampaignState | null>(null);
@@ -35,6 +46,26 @@ export default function BulkBroadcast() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollTimerRef = useRef<any>(null);
+
+  // Check if uploaded CSV contains custom message per recipient
+  const hasCustomMessages = parsedContacts.length > 0 && parsedContacts.some(c => !!c.message);
+
+  // Persist draft across navigation
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_NAME, campaignName);
+  }, [campaignName]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_NUMBERS, numbersInput);
+  }, [numbersInput]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_CONTACTS, JSON.stringify(parsedContacts));
+  }, [parsedContacts]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_TEMPLATE, messageTemplate);
+  }, [messageTemplate]);
 
   // Fetch active campaign from server
   const fetchActiveCampaign = async () => {
@@ -52,8 +83,9 @@ export default function BulkBroadcast() {
         const data = await res.json();
         if (data && data.status && data.status !== 'idle') {
           setActiveCampaign(data);
+          if (data.name && !campaignName) setCampaignName(data.name);
+          if (data.messageTemplate && !messageTemplate) setMessageTemplate(data.messageTemplate);
         } else if (activeCampaign && (activeCampaign.status === 'running' || activeCampaign.status === 'paused')) {
-          // If server reports completed or none, update local state
           setActiveCampaign(prev => prev ? { ...prev, status: 'completed' } : null);
         }
       }
@@ -138,9 +170,10 @@ export default function BulkBroadcast() {
 
       setParsedContacts(items);
       setNumbersInput(rawNumbers.join('\n'));
+      const hasCustom = items.some(c => !!c.message);
       setStatusMessage({
         type: 'info',
-        text: `${items.length} ${t('contactsLoaded')}`
+        text: `${items.length} ${t('contactsLoaded')}${hasCustom ? ' (Individual message column detected)' : ''}`
       });
     };
     reader.readAsText(file, 'UTF-8');
@@ -164,8 +197,9 @@ export default function BulkBroadcast() {
       return;
     }
 
-    if (!messageTemplate.trim()) {
-      setStatusMessage({ type: 'error', text: 'Please enter a message template.' });
+    // Message template is optional if CSV contains custom messages
+    if (!messageTemplate.trim() && !hasCustomMessages) {
+      setStatusMessage({ type: 'error', text: 'Please enter a message template or upload a CSV with message column.' });
       return;
     }
 
@@ -191,7 +225,7 @@ export default function BulkBroadcast() {
       if (res.ok) {
         const campaign = await res.json();
         setActiveCampaign(campaign);
-        setStatusMessage({ type: 'success', text: 'Campaign started successfully!' });
+        setStatusMessage({ type: 'success', text: 'Campaign queued and running in background!' });
       } else {
         const err = await res.json().catch(() => ({ error: 'Failed to start campaign' }));
         setStatusMessage({ type: 'error', text: err.error || 'Failed to start campaign' });
@@ -330,17 +364,26 @@ export default function BulkBroadcast() {
                 }}
                 disabled={activeCampaign?.status === 'running'}
               />
-              <p className="text-xs text-slate-500 mt-1">{t('csvSupportedCols')}</p>
+              <p className="text-xs text-slate-500 mt-1">
+                {hasCustomMessages ? '✓ CSV detected with custom per-recipient message column' : t('csvSupportedCols')}
+              </p>
             </div>
 
             <div>
-              <label className="block text-sm font-semibold text-slate-400 mb-2">
-                {t('messageTemplate')}
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-semibold text-slate-400">
+                  {t('messageTemplate')}
+                </label>
+                {hasCustomMessages && (
+                  <span className="text-xs text-emerald-400 font-medium">
+                    (Optional: CSV includes custom messages)
+                  </span>
+                )}
+              </div>
               <textarea
-                required
+                required={!hasCustomMessages}
                 rows={5}
-                placeholder={t('messageTemplatePlaceholder')}
+                placeholder={hasCustomMessages ? 'Optional fallback message if a CSV row is missing a custom message...' : t('messageTemplatePlaceholder')}
                 className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-600 resize-none"
                 value={messageTemplate}
                 onChange={(e) => setMessageTemplate(e.target.value)}
@@ -369,7 +412,7 @@ export default function BulkBroadcast() {
             {(!activeCampaign || activeCampaign.status === 'completed' || activeCampaign.status === 'cancelled') && (
               <button
                 type="submit"
-                disabled={submitting || (!numbersInput && parsedContacts.length === 0) || !messageTemplate}
+                disabled={submitting || (!numbersInput && parsedContacts.length === 0) || (!messageTemplate && !hasCustomMessages)}
                 className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20"
               >
                 {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}

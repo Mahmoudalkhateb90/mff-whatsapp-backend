@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { startSession, getSessionStatus, logoutSession, sendWhatsAppMessage, autoRestoreSessions } from './whatsappManager.js';
 import { getUserRole, getAllUsers, createUser, resetUserPassword, deleteUser, getDb, getAnalyticsMetrics } from './firestoreService.js';
@@ -63,7 +64,7 @@ app.post('/api/login', async (req, res) => {
         }
       }
     } catch (dbError) {
-      console.warn('[API] Firestore user lookup failed:', dbError.message);
+      console.warn('[API] Firestore user lookup notice:', dbError.message);
     }
 
     return res.status(401).json({ error: 'Invalid email or password' });
@@ -309,17 +310,18 @@ app.get('/api/campaigns/active', requireAuth, async (req, res) => {
   }
 });
 
-// Analytics Endpoints
+// Analytics Endpoints with Agent/User filtering
 app.get('/api/analytics/metrics', requireAuth, async (req, res) => {
   try {
-    const { range, startDate, endDate, status } = req.query;
+    const { range, startDate, endDate, status, agentId } = req.query;
     const metrics = await getAnalyticsMetrics({
       range: range || 'all',
       startDate,
       endDate,
       status: status || 'all',
       userId: req.userId,
-      userRole: req.userRole
+      userRole: req.userRole,
+      agentId: agentId || 'all'
     });
     res.json(metrics);
   } catch (error) {
@@ -328,7 +330,7 @@ app.get('/api/analytics/metrics', requireAuth, async (req, res) => {
   }
 });
 
-// Setup Vite for development and static serving for production
+// Setup Vite for development and safe static serving for production
 const PORT = process.env.PORT || 3000;
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -337,25 +339,38 @@ async function bootstrap() {
   autoRestoreSessions().catch(err => {
     console.warn('[Server] autoRestoreSessions notice:', err.message);
   });
+
+  const distPath = path.resolve('./dist');
+  const indexPath = path.join(distPath, 'index.html');
+  const hasDist = fs.existsSync(distPath) && fs.existsSync(indexPath);
+
   if (!isProd) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    app.use(express.static(path.resolve('./dist')));
+  } else if (hasDist) {
+    app.use(express.static(distPath));
   }
 
   app.use((req, res, next) => {
     if (req.path.startsWith('/api')) {
       return res.status(404).json({ error: 'Endpoint not found' });
     }
-    
-    if (isProd) {
-      return res.sendFile(path.resolve('./dist/index.html'));
+
+    if (hasDist) {
+      return res.sendFile(indexPath);
     }
-    
+
+    if (isProd) {
+      return res.status(200).json({
+        status: 'online',
+        service: 'MFF WhatsApp Backend API',
+        message: 'Backend running on Render. Dist frontend not found.'
+      });
+    }
+
     next();
   });
 

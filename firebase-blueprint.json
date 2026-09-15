@@ -47,12 +47,26 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["status"]
+    },
+    "WhatsAppSession": {
+      "title": "WhatsAppSession",
+      "description": "Persistent Baileys WhatsApp session state and credentials stored in Firestore",
+      "type": "object",
+      "properties": {
+        "creds": { "type": "string" },
+        "status": { "type": "string", "enum": ["connected", "connecting", "disconnected", "logged_out"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/User" },
       "description": "User profiles and RBAC role assignments"
+    },
+    "/whatsapp_sessions/{userId}": {
+      "schema": { "$ref": "#/entities/WhatsAppSession" },
+      "description": "WhatsApp session remote auth store for Baileys"
     },
     "/campaigns/{campaignId}": {
       "schema": { "$ref": "#/entities/Campaign" },

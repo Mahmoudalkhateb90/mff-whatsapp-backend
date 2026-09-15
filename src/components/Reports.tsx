@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BarChart3, MessageSquare, Activity, ShieldAlert, CheckCircle2, Loader2, Filter, Calendar } from 'lucide-react';
+import { BarChart3, MessageSquare, Activity, ShieldAlert, CheckCircle2, Loader2, Filter, Calendar, Users as UsersIcon } from 'lucide-react';
 import { API_BASE_URL } from '../config';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -49,6 +49,7 @@ export default function Reports() {
 
   const [dateRange, setDateRange] = useState<'today' | '7days' | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'sent' | 'failed'>('all');
+  const [selectedAgent, setSelectedAgent] = useState<string>('all');
 
   const getAuthHeaders = () => {
     const user = getSessionUser();
@@ -62,7 +63,7 @@ export default function Reports() {
   const fetchAnalytics = async () => {
     try {
       const [metricsRes, usersRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/analytics/metrics?range=${dateRange}&status=${statusFilter}`, {
+        fetch(`${API_BASE_URL}/api/analytics/metrics?range=${dateRange}&status=${statusFilter}&agentId=${selectedAgent}`, {
           headers: { ...getAuthHeaders() }
         }),
         fetch(`${API_BASE_URL}/api/users`, {
@@ -88,7 +89,7 @@ export default function Reports() {
 
   useEffect(() => {
     fetchAnalytics();
-  }, [dateRange, statusFilter]);
+  }, [dateRange, statusFilter, selectedAgent]);
 
   const formatLogTime = (log: MessageLog) => {
     const ts = log.timestamp || log.createdAt;
@@ -119,6 +120,24 @@ export default function Reports() {
 
         {/* Filter Controls */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Filter by Agent/User */}
+          <div className="flex items-center bg-slate-800 border border-slate-700 rounded-xl p-1">
+            <UsersIcon className="w-4 h-4 text-slate-400 mx-2" />
+            <select
+              value={selectedAgent}
+              onChange={(e) => setSelectedAgent(e.target.value)}
+              className="bg-transparent text-xs font-semibold text-slate-300 py-1.5 px-2 focus:outline-none"
+              title="Filter by Agent/User"
+            >
+              <option value="all" className="bg-slate-800 text-white">All Agents / Users</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id} className="bg-slate-800 text-white">
+                  {u.displayName || u.email} ({u.role})
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Date Range Filter */}
           <div className="flex items-center bg-slate-800 border border-slate-700 rounded-xl p-1">
             <Calendar className="w-4 h-4 text-slate-400 mx-2" />
