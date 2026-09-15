@@ -66,6 +66,11 @@ const translations: Translations = {
     connected: 'Connected',
     disconnected: 'Disconnected',
     reconnecting: 'Reconnecting...',
+    scanNewQR: 'Scan New QR Code',
+    reconnectSaved: 'Try Reconnect Saved Session',
+    resetSessionState: 'Reset Session to Idle',
+    sessionIdleDesc: 'No active session loop. You have full manual control over your connection.',
+    reconnectFailedDesc: 'Saved session reconnection did not complete. A fresh QR code is ready below.',
     // Single Message
     sendSingleMessage: 'Send Single Message',
     recipientPhone: 'Recipient Phone Number (with Country Code)',
@@ -179,6 +184,11 @@ const translations: Translations = {
     connected: 'متصل',
     disconnected: 'غير متصل',
     reconnecting: 'جاري إعادة الاتصال...',
+    scanNewQR: 'مسح رمز QR جديد',
+    reconnectSaved: 'محاولة إعادة ربط الجلسة المحفوظة',
+    resetSessionState: 'إعادة ضبط الجلسة إلى الخمول',
+    sessionIdleDesc: 'لا توجد حلقة اتصال مستمرة. لديك تحكم يدوي كامل في حالة الاتصال.',
+    reconnectFailedDesc: 'تعذر الاتصال بالجلسة المحفوظة. تم تجهيز رمز QR جديد أدناه.',
     // Single Message
     sendSingleMessage: 'إرسال رسالة فردية',
     recipientPhone: 'رقم هاتف المستلم (مع رمز الدولة)',

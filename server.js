@@ -3,7 +3,16 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
-import { startSession, getSessionStatus, logoutSession, sendWhatsAppMessage, autoRestoreSessions } from './whatsappManager.js';
+import { 
+  startFreshSession, 
+  manualReconnectSession, 
+  resetSession, 
+  startSession, 
+  getSessionStatus, 
+  logoutSession, 
+  sendWhatsAppMessage, 
+  autoRestoreSessions 
+} from './whatsappManager.js';
 import { getUserRole, getAllUsers, createUser, resetUserPassword, deleteUser, getDb, getAnalyticsMetrics } from './firestoreService.js';
 import { createCampaign, pauseCampaign, resumeCampaign, cancelCampaign, getActiveCampaign } from './campaignManager.js';
 
@@ -168,19 +177,49 @@ app.get('/api/users/me', requireAuth, async (req, res) => {
   }
 });
 
-// Session Endpoints
-app.post('/api/sessions/start', requireAuth, async (req, res) => {
-  const { userId } = req.body;
-  if (!userId || userId !== req.userId) {
+// Explicit WhatsApp Session Control Endpoints
+app.post('/api/session/start', requireAuth, async (req, res) => {
+  const userId = req.body?.userId || req.userId;
+  if (!userId || (userId !== req.userId && req.userRole !== 'Super Admin')) {
     return res.status(403).json({ error: 'You can only start your own session' });
   }
 
   try {
-    const result = await startSession(userId);
+    const result = await startFreshSession(userId);
     res.json(result);
   } catch (error) {
-    console.error(`[StartSession] Error for user ${userId}:`, error);
-    res.status(500).json({ error: 'Failed to start WhatsApp session' });
+    console.error(`[StartFreshSession] Error for user ${userId}:`, error);
+    res.status(500).json({ error: 'Failed to start fresh WhatsApp session', message: error.message });
+  }
+});
+
+app.post('/api/session/reconnect', requireAuth, async (req, res) => {
+  const userId = req.body?.userId || req.userId;
+  if (!userId || (userId !== req.userId && req.userRole !== 'Super Admin')) {
+    return res.status(403).json({ error: 'You can only reconnect your own session' });
+  }
+
+  try {
+    const result = await manualReconnectSession(userId);
+    res.json(result);
+  } catch (error) {
+    console.error(`[ManualReconnect] Error for user ${userId}:`, error);
+    res.status(500).json({ error: 'Failed to reconnect session', message: error.message });
+  }
+});
+
+app.post('/api/session/reset', requireAuth, async (req, res) => {
+  const userId = req.body?.userId || req.userId;
+  if (!userId || (userId !== req.userId && req.userRole !== 'Super Admin')) {
+    return res.status(403).json({ error: 'You can only reset your own session' });
+  }
+
+  try {
+    const result = await resetSession(userId);
+    res.json(result);
+  } catch (error) {
+    console.error(`[ResetSession] Error for user ${userId}:`, error);
+    res.status(500).json({ error: 'Failed to reset session', message: error.message });
   }
 });
 
@@ -194,17 +233,22 @@ app.get('/api/session/status', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/session/reset', requireAuth, async (req, res) => {
+// Backward compatibility routes
+app.post('/api/sessions/start', requireAuth, async (req, res) => {
+  const userId = req.body?.userId || req.userId;
+  if (!userId || (userId !== req.userId && req.userRole !== 'Super Admin')) {
+    return res.status(403).json({ error: 'You can only start your own session' });
+  }
+
   try {
-    const result = await logoutSession(req.userId);
+    const result = await startFreshSession(userId);
     res.json(result);
   } catch (error) {
-    console.error(`[LogoutSession] Error for user ${req.userId}:`, error);
-    res.status(500).json({ error: 'Failed to reset session' });
+    console.error(`[StartSession] Error for user ${userId}:`, error);
+    res.status(500).json({ error: 'Failed to start WhatsApp session' });
   }
 });
 
-// Backward compatibility or alternative routes
 app.get('/api/sessions/status/:userId', requireAuth, async (req, res) => {
   const { userId } = req.params;
   if (userId !== req.userId && req.userRole !== 'Super Admin') {
@@ -221,13 +265,13 @@ app.get('/api/sessions/status/:userId', requireAuth, async (req, res) => {
 });
 
 app.post('/api/sessions/logout', requireAuth, async (req, res) => {
-  const { userId } = req.body;
-  if (!userId || userId !== req.userId) {
+  const userId = req.body?.userId || req.userId;
+  if (!userId || (userId !== req.userId && req.userRole !== 'Super Admin')) {
     return res.status(403).json({ error: 'You can only logout your own session' });
   }
 
   try {
-    const result = await logoutSession(userId);
+    const result = await resetSession(userId);
     res.json(result);
   } catch (error) {
     console.error(`[LogoutSession] Error for user ${userId}:`, error);
