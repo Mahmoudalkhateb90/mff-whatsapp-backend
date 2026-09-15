@@ -777,6 +777,30 @@ export const logoutSession = resetSession;
 export const startSession = startFreshSession;
 
 /**
+ * Checks if any session is in connecting or reconnecting state
+ */
+export function isWhatsAppConnectingOrInitializing() {
+  for (const s of activeSessions.values()) {
+    if (s && (s.status === 'connecting' || s.status === 'reconnecting')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Checks if any session is currently active and connected
+ */
+export function hasAnyConnectedSession() {
+  for (const s of activeSessions.values()) {
+    if (s && s.sock && s.status === 'connected') {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Direct synchronous socket transmission helper used by Centralized Message Queue.
  * Checks the agent's session, or falls back to any active connected session
  * in the system so all 20-30 concurrent agents share the connection seamlessly.
@@ -791,6 +815,21 @@ export async function sendWhatsAppMessageDirect(userId, to, message) {
         session = s;
         console.log(`[WhatsApp] Multi-user router: Using shared active WhatsApp session (${sUserId}) for user (${userId})`);
         break;
+      }
+    }
+  }
+
+  // Graceful session handling: If any session is temporarily reconnecting or initializing, pause 3s
+  if (!session || !session.sock || session.status !== 'connected') {
+    if (isWhatsAppConnectingOrInitializing()) {
+      console.log(`[WhatsApp] Session is connecting/reconnecting. Pausing for 3 seconds to await socket readiness...`);
+      await new Promise(r => setTimeout(r, 3000));
+      // Re-check after waiting
+      for (const [sUserId, s] of activeSessions.entries()) {
+        if (s && s.sock && s.status === 'connected') {
+          session = s;
+          break;
+        }
       }
     }
   }

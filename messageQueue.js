@@ -1,6 +1,9 @@
 import { getDb } from './firestoreService.js';
-import { sendWhatsAppMessageDirect } from './whatsappManager.js';
-import { FieldValue } from 'firebase-admin/firestore';
+import { 
+  sendWhatsAppMessageDirect, 
+  isWhatsAppConnectingOrInitializing, 
+  hasAnyConnectedSession 
+} from './whatsappManager.js';
 
 /**
  * Enterprise Anti-Ban & Concurrent Queue Engine for WhatsApp
@@ -14,8 +17,9 @@ import { FieldValue } from 'firebase-admin/firestore';
  * 3. Humanized Jitter & Anti-Ban Safety:
  *    - Safe randomized delay between 2.0 and 4.0 seconds per bulk message.
  *    - 10-second cool-down break after every 30 bulk messages.
- * 4. Resilient Error Handling:
+ * 4. Resilient Error Handling & Graceful Socket Reconnect:
  *    - Failure on any recipient is logged to Firestore and worker continues immediately.
+ *    - If socket is reconnecting, pauses 3s without failing pending messages.
  */
 
 // High Priority Queue for instant 1-to-1 direct messages
@@ -49,7 +53,7 @@ async function logMessageDelivery({ userId, phone, status, campaignId, errorMess
       status: status || 'sent',
       campaignId: campaignId || null,
       errorMessage: errorMessage || null,
-      timestamp: FieldValue.serverTimestamp()
+      timestamp: new Date().toISOString()
     };
 
     await database.collection('messages_log').add(logEntry).catch(() => {});
@@ -143,6 +147,20 @@ async function runWorker() {
         continue;
       }
 
+      // Graceful Queue Session Handling: If WhatsApp socket is temporarily reconnecting or initializing,
+      // pause queue worker for 3 seconds instead of failing messages.
+      if (isWhatsAppConnectingOrInitializing() && !hasAnyConnectedSession()) {
+        console.log(`[MessageQueue] WhatsApp socket is temporarily reconnecting/initializing. Pausing queue worker for 3 seconds...`);
+        if (type === 'single') {
+          highPriorityQueue.unshift(item);
+        } else if (campaignQueue) {
+          campaignQueue.items.unshift(item);
+          refreshRoundRobinKeys();
+        }
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+
       item.status = 'sending';
       const cleanPhone = (item.to || '').replace(/\D/g, '');
 
@@ -173,6 +191,22 @@ async function runWorker() {
           try { item.resolve({ success: true, messageId: item.messageId, status: 'sent' }); } catch (e) {}
         }
       } catch (err) {
+        // If error occurred because socket was reconnecting, put item back and pause 3s
+        if (isWhatsAppConnectingOrInitializing() || err?.message?.includes('WhatsApp session is not connected')) {
+          if (isWhatsAppConnectingOrInitializing()) {
+            console.log(`[MessageQueue] Socket is reconnecting. Re-queuing ${item.to} and pausing for 3 seconds...`);
+            item.status = 'queued';
+            if (type === 'single') {
+              highPriorityQueue.unshift(item);
+            } else if (campaignQueue) {
+              campaignQueue.items.unshift(item);
+              refreshRoundRobinKeys();
+            }
+            await new Promise(r => setTimeout(r, 3000));
+            continue;
+          }
+        }
+
         console.error(`[MessageQueue] Delivery failure to ${item.to}:`, err?.message || err);
         item.status = 'failed';
         item.error = err?.message || 'Send failed';

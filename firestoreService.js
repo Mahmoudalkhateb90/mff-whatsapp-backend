@@ -207,10 +207,29 @@ class FirestoreWrapper {
 
 function cleanDataForFirestore(obj) {
   if (!obj || typeof obj !== 'object') return obj;
+  if (obj instanceof Date) return obj.toISOString();
+  
+  if (Array.isArray(obj)) {
+    return obj.map(item => cleanDataForFirestore(item));
+  }
+
   const copy = { ...obj };
   for (const [k, v] of Object.entries(copy)) {
     if (v === undefined) {
       delete copy[k];
+    } else if (v && typeof v === 'object') {
+      // Catch any ServerTimestampTransform or sentinel objects
+      if (
+        v.constructor?.name === 'ServerTimestampTransform' ||
+        v._methodName === 'serverTimestamp' ||
+        (typeof v.isEqual === 'function' && !v.toDate && !v.nanoseconds)
+      ) {
+        copy[k] = new Date().toISOString();
+      } else if (v instanceof Date) {
+        copy[k] = v.toISOString();
+      } else {
+        copy[k] = cleanDataForFirestore(v);
+      }
     }
   }
   return copy;

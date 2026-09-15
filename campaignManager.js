@@ -5,7 +5,6 @@ import {
   resumeCampaignInQueue, 
   cancelCampaignInQueue 
 } from './messageQueue.js';
-import { FieldValue } from 'firebase-admin/firestore';
 
 // In-memory runtime tracking for active broadcast queues per user
 const activeCampaignQueues = new Map();
@@ -18,6 +17,7 @@ async function syncCampaignToFirestore(campaign) {
     const database = getDb();
     if (!database) return;
 
+    const nowIso = new Date().toISOString();
     await database.collection('campaigns').doc(campaign.id).set({
       id: campaign.id,
       name: campaign.name,
@@ -29,8 +29,8 @@ async function syncCampaignToFirestore(campaign) {
       delaySeconds: campaign.delaySeconds,
       userId: campaign.userId,
       messageTemplate: campaign.messageTemplate,
-      updatedAt: FieldValue.serverTimestamp(),
-      ...(campaign.createdAt ? {} : { createdAt: FieldValue.serverTimestamp() })
+      updatedAt: nowIso,
+      ...(campaign.createdAt ? {} : { createdAt: nowIso })
     }, { merge: true });
   } catch (error) {
     console.warn(`[Campaign] Firestore sync failed for ${campaign.id}:`, error.message);
@@ -124,7 +124,7 @@ export async function pauseCampaign(campaignId) {
       if (doc.exists) {
         await database.collection('campaigns').doc(campaignId).update({
           status: 'paused',
-          updatedAt: FieldValue.serverTimestamp()
+          updatedAt: new Date().toISOString()
         });
         return { success: true, status: 'paused', id: campaignId };
       }
@@ -152,7 +152,7 @@ export async function resumeCampaign(campaignId) {
       if (doc.exists) {
         await database.collection('campaigns').doc(campaignId).update({
           status: 'running',
-          updatedAt: FieldValue.serverTimestamp()
+          updatedAt: new Date().toISOString()
         });
         return { success: true, status: 'running', id: campaignId };
       }
@@ -183,7 +183,7 @@ export async function cancelCampaign(campaignId) {
   if (database) {
     await database.collection('campaigns').doc(campaignId).update({
       status: 'cancelled',
-      updatedAt: FieldValue.serverTimestamp()
+      updatedAt: new Date().toISOString()
     }).catch(() => {});
   }
 

@@ -186,27 +186,24 @@ export default function BulkBroadcast() {
     URL.revokeObjectURL(url);
   };
 
-  // CSV & File Parsing with direct support for Phone and Custom Message
+  // CSV & File Parsing with direct support for Phone and Custom Message & Arabic/UTF-8 BOM
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = (event) => {
-      const text = event.target?.result as string;
-      const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+      let text = (event.target?.result as string) || '';
+      // Automatically strip UTF-8 Byte Order Mark (\uFEFF)
+      text = text.replace(/^\uFEFF/, '');
       
-      const items: ContactItem[] = [];
-      const rawNumbers: string[] = [];
+      const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+      if (lines.length === 0) return;
 
-      lines.forEach((line, index) => {
-        // Skip header if matches Phone/Number
-        if (index === 0 && (line.toLowerCase().includes('phone') || line.toLowerCase().includes('mobile') || line.toLowerCase().includes('رقم'))) {
-          return;
-        }
+      const PHONE_HEADERS = ['phone', 'mobile', 'number', 'الرقم', 'الهاتف', 'الجوال'];
+      const MESSAGE_HEADERS = ['message', 'text', 'content', 'الرسالة', 'نص الرسالة', 'نص_الرسالة'];
 
-        // Parse CSV row with potential quoted values
-        const delimiter = line.includes(';') ? ';' : line.includes('\t') ? '\t' : ',';
+      const parseRow = (line: string, delimiter: string): string[] => {
         const cols: string[] = [];
         let cur = '';
         let insideQuote = false;
@@ -214,7 +211,12 @@ export default function BulkBroadcast() {
         for (let i = 0; i < line.length; i++) {
           const char = line[i];
           if (char === '"') {
-            insideQuote = !insideQuote;
+            if (insideQuote && line[i + 1] === '"') {
+              cur += '"';
+              i++;
+            } else {
+              insideQuote = !insideQuote;
+            }
           } else if (char === delimiter && !insideQuote) {
             cols.push(cur.trim());
             cur = '';
@@ -223,15 +225,56 @@ export default function BulkBroadcast() {
           }
         }
         cols.push(cur.trim());
+        return cols;
+      };
 
-        const rawPhone = (cols[0] || '').replace(/\D/g, '');
-        const customMessage = cols[1] ? cols[1].replace(/^"|"$/g, '').trim() : '';
+      // Detect delimiter on first line
+      const firstLine = lines[0];
+      const delimiter = firstLine.includes(';') ? ';' : firstLine.includes('\t') ? '\t' : ',';
+      
+      const headerCols = parseRow(firstLine, delimiter).map(c => c.replace(/^"|"$/g, '').trim());
+      
+      let phoneColIdx = -1;
+      let messageColIdx = -1;
+      let startIndex = 0;
+
+      // Check if first row is a header (Arabic or English)
+      headerCols.forEach((col, idx) => {
+        const colClean = col.toLowerCase();
+        if (PHONE_HEADERS.some(h => colClean.includes(h.toLowerCase()))) {
+          phoneColIdx = idx;
+        }
+        if (MESSAGE_HEADERS.some(h => colClean.includes(h.toLowerCase()))) {
+          messageColIdx = idx;
+        }
+      });
+
+      if (phoneColIdx !== -1 || messageColIdx !== -1) {
+        startIndex = 1; // Row 0 is header
+        if (phoneColIdx === -1) phoneColIdx = 0;
+        if (messageColIdx === -1 && headerCols.length > 1) messageColIdx = 1;
+      } else {
+        phoneColIdx = 0;
+        messageColIdx = 1;
+        startIndex = 0;
+      }
+
+      const items: ContactItem[] = [];
+      const rawNumbers: string[] = [];
+
+      for (let i = startIndex; i < lines.length; i++) {
+        const row = parseRow(lines[i], delimiter);
+        const rawPhone = (row[phoneColIdx] || '').replace(/\D/g, '');
+        let customMessage = '';
+        if (messageColIdx !== -1 && row[messageColIdx]) {
+          customMessage = row[messageColIdx].replace(/^"|"$/g, '').trim();
+        }
 
         if (rawPhone.length >= 7) {
           items.push({ phone: rawPhone, message: customMessage || undefined });
           rawNumbers.push(rawPhone);
         }
-      });
+      }
 
       setParsedContacts(items);
       setNumbersInput(rawNumbers.join('\n'));
