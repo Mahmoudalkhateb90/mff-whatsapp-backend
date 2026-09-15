@@ -5,8 +5,6 @@
 import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from './firebase';
 import { API_BASE_URL } from './config';
 import { Loader2 } from 'lucide-react';
 import { SessionProvider } from './context/SessionContext';
@@ -20,32 +18,27 @@ import SingleMessage from './components/SingleMessage';
 import BulkBroadcast from './components/BulkBroadcast';
 import Reports from './components/Reports';
 
+const getSessionUser = () => {
+  try {
+    const session = localStorage.getItem('user_session');
+    return session ? JSON.parse(session) : null;
+  } catch {
+    return null;
+  }
+};
+
 function PrivateRoute({ children, allowedRoles }: { children: ReactNode, allowedRoles?: string[] }) {
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<string | null>(null);
+  const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
-    if (auth.currentUser) {
-      if (auth.currentUser.email === 'mahmoud.alkhateeb@money.jo') {
-        setUserRole('Super Admin');
-      }
-      
-      fetch(`${API_BASE_URL}/api/users/me`, {
-        headers: { 'x-user-id': auth.currentUser.uid }
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (auth.currentUser?.email === 'mahmoud.alkhateeb@money.jo') {
-           setUserRole('Super Admin');
-        } else {
-           setUserRole(data.role);
-        }
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-    } else {
-      setLoading(false);
+    const sessionUser = getSessionUser();
+    setUser(sessionUser);
+    if (sessionUser) {
+      setUserRole(sessionUser.role);
     }
+    setLoading(false);
   }, []);
 
   if (loading) {
@@ -56,7 +49,7 @@ function PrivateRoute({ children, allowedRoles }: { children: ReactNode, allowed
     );
   }
 
-  if (!auth.currentUser) {
+  if (!user) {
     return <Navigate to="/login" replace />;
   }
 
@@ -78,82 +71,65 @@ function PrivateRoute({ children, allowedRoles }: { children: ReactNode, allowed
 }
 
 export default function App() {
-  const [authInitialized, setAuthInitialized] = useState(false);
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, () => {
-      setAuthInitialized(true);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  if (!authInitialized) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <Loader2 className="w-10 h-10 text-emerald-500 animate-spin" />
-      </div>
-    );
-  }
-
   return (
     <LanguageProvider>
-    <SessionProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<Login />} />
+      <SessionProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            
+            {/* WhatsApp Session (QR Code) - All Roles */}
+            <Route 
+              path="/" 
+              element={
+                <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}>
+                  <Dashboard />
+                </PrivateRoute>
+              } 
+            />
           
-          {/* WhatsApp Session (QR Code) - All Roles */}
+          {/* Single Messaging - All Roles */}
           <Route 
-            path="/" 
+            path="/single" 
             element={
               <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}>
-                <Dashboard />
+                <SingleMessage />
               </PrivateRoute>
             } 
           />
-        
-        {/* Single Messaging - All Roles */}
-        <Route 
-          path="/single" 
-          element={
-            <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}>
-              <SingleMessage />
-            </PrivateRoute>
-          } 
-        />
-        
-        {/* Bulk Broadcast Campaign - Super Admin, Manager, Team Leader */}
-        <Route 
-          path="/bulk" 
-          element={
-            <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
-              <BulkBroadcast />
-            </PrivateRoute>
-          } 
-        />
-        
-        {/* User Management - Super Admin Only */}
-        <Route 
-          path="/admin/users" 
-          element={
-            <PrivateRoute allowedRoles={['Super Admin']}>
-              <AdminPanel />
-            </PrivateRoute>
-          } 
-        />
-        
-        {/* Team Reports & Audit Logs - Super Admin, Manager, Team Leader */}
-        <Route 
-          path="/reports" 
-          element={
-            <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
-              <Reports />
-            </PrivateRoute>
-          } 
-        />
-      </Routes>
-    </BrowserRouter>
-    </SessionProvider>
+          
+          {/* Bulk Broadcast Campaign - Super Admin, Manager, Team Leader */}
+          <Route 
+            path="/bulk" 
+            element={
+              <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
+                <BulkBroadcast />
+              </PrivateRoute>
+            } 
+          />
+          
+          {/* User Management - Super Admin Only */}
+          <Route 
+            path="/admin/users" 
+            element={
+              <PrivateRoute allowedRoles={['Super Admin']}>
+                <AdminPanel />
+              </PrivateRoute>
+            } 
+          />
+          
+          {/* Team Reports & Audit Logs - Super Admin, Manager, Team Leader */}
+          <Route 
+            path="/reports" 
+            element={
+              <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
+                <Reports />
+              </PrivateRoute>
+            } 
+          />
+        </Routes>
+      </BrowserRouter>
+      </SessionProvider>
     </LanguageProvider>
   );
 }

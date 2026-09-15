@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { Send, Loader2, Users, Upload, FileText } from 'lucide-react';
-import { auth } from '../firebase';
 import { API_BASE_URL } from '../config';
+
+const getSessionUser = () => { try { return JSON.parse(localStorage.getItem('user_session') || '{}'); } catch { return {}; } };
 
 export default function BulkBroadcast() {
   const [numbersInput, setNumbersInput] = useState('');
@@ -53,10 +54,10 @@ export default function BulkBroadcast() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-user-id': auth.currentUser?.uid || ''
+            'x-user-id': getSessionUser().id || ''
           },
           body: JSON.stringify({
-            userId: auth.currentUser?.uid,
+            userId: getSessionUser().id,
             to: `${formattedPhone}@s.whatsapp.net`,
             message: messageTemplate
           })

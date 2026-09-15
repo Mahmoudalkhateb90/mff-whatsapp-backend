@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
-import { auth } from '../firebase';
 import { API_BASE_URL } from '../config';
 import { Users, UserPlus, Key, Loader2, ShieldCheck, Trash2, Eye, EyeOff } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
+
+const getSessionUser = () => { try { return JSON.parse(localStorage.getItem('user_session') || '{}'); } catch { return {}; } };
 
 interface User {
   id: string;
@@ -35,9 +36,9 @@ export default function AdminPanel() {
 
   const getAuthHeaders = () => {
     return {
-      'x-user-id': auth.currentUser?.uid || auth.currentUser?.email || '',
-      'x-user-email': auth.currentUser?.email || '',
-      'x-user-role': auth.currentUser?.email === 'mahmoud.alkhateeb@money.jo' ? 'Super Admin' : ''
+      'x-user-id': getSessionUser().id || getSessionUser().email || '',
+      'x-user-email': getSessionUser().email || '',
+      'x-user-role': getSessionUser().email === 'mahmoud.alkhateeb@money.jo' ? 'Super Admin' : ''
     };
   };
 

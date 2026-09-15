@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../firebase';
 import { useNavigate } from 'react-router-dom';
 import { Smartphone, Lock, User } from 'lucide-react';
+import { API_BASE_URL } from '../config';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -18,8 +17,27 @@ export default function Login() {
     setLoading(true);
 
     try {
-      await signInWithEmailAndPassword(auth, email, password);
-      navigate('/');
+      const response = await fetch(`${API_BASE_URL}/api/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email: email.trim(), password: password.trim() }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to authenticate');
+      }
+
+      const data = await response.json();
+      
+      if (data.success && data.user) {
+        localStorage.setItem('user_session', JSON.stringify(data.user));
+        navigate('/');
+      } else {
+        throw new Error('Invalid response from server');
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to login');
     } finally {

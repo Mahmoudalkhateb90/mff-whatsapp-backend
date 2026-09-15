@@ -1,7 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { auth } from '../firebase';
 import { API_BASE_URL } from '../config';
-import { onAuthStateChanged } from 'firebase/auth';
 
 interface SessionContextType {
   status: string;
@@ -22,10 +20,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUserId(user?.uid || null);
-    });
-    return () => unsubscribe();
+    const checkSession = () => {
+      try {
+        const session = localStorage.getItem('user_session');
+        if (session) {
+          const user = JSON.parse(session);
+          setUserId(user.id);
+        } else {
+          setUserId(null);
+        }
+      } catch (err) {
+        setUserId(null);
+      }
+    };
+    
+    checkSession();
+    // Optional: listen to storage events to sync across tabs
+    window.addEventListener('storage', checkSession);
+    return () => window.removeEventListener('storage', checkSession);
   }, []);
 
   const checkStatus = async () => {

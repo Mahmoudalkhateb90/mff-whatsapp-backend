@@ -3,13 +3,74 @@ import cors from 'cors';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { startSession, getSessionStatus, logoutSession, sendWhatsAppMessage } from './whatsappManager.js';
-import { getUserRole, getAllUsers, createUser, resetUserPassword, deleteUser } from './firestoreService.js';
+import { getUserRole, getAllUsers, createUser, resetUserPassword, deleteUser, getDb } from './firestoreService.js';
 
 const app = express();
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Root & Health Routes
+app.get('/api', (req, res) => {
+  res.json({ status: 'online', service: 'MFF WhatsApp Backend API' });
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'healthy' });
+});
+
+// Internal System Authentication Endpoints
+app.post('/api/login', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    const cleanEmail = email?.trim().toLowerCase();
+    const cleanPassword = password?.trim();
+
+    if (cleanEmail === 'mahmoud.alkhateeb@money.jo' && cleanPassword === 'MFF@money@2021') {
+      return res.json({
+        success: true,
+        user: {
+          id: 'super-admin',
+          email: 'mahmoud.alkhateeb@money.jo',
+          name: 'Mahmoud Alkhateeb',
+          role: 'Super Admin'
+        }
+      });
+    }
+
+    try {
+      const db = getDb();
+      if (db) {
+        const snapshot = await db.collection('users').where('email', '==', cleanEmail).limit(1).get();
+
+        if (!snapshot.empty) {
+          const userDoc = snapshot.docs[0];
+          const userData = userDoc.data();
+
+          if (!userData.password || userData.password?.trim() === cleanPassword) {
+            return res.json({
+              success: true,
+              user: {
+                id: userDoc.id,
+                email: userData.email,
+                name: userData.displayName || '',
+                role: userData.role || 'Agent'
+              }
+            });
+          }
+        }
+      }
+    } catch (dbError) {
+      console.warn('[API] Firestore user lookup failed:', dbError.message);
+    }
+
+    return res.status(401).json({ error: 'Invalid email or password' });
+  } catch (error) {
+    console.error('[API] Login error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 export async function requireAuth(req, res, next) {
   const userId = req.headers['x-user-id'];
@@ -182,10 +243,19 @@ async function bootstrap() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.resolve('./dist')));
-    app.use((req, res) => {
-      res.sendFile(path.resolve('./dist/index.html'));
-    });
   }
+
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api')) {
+      return res.status(404).json({ error: 'Endpoint not found' });
+    }
+    
+    if (isProd) {
+      return res.sendFile(path.resolve('./dist/index.html'));
+    }
+    
+    next();
+  });
 
   app.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);

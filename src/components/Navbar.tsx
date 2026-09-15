@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Smartphone, LogOut, KeyRound } from 'lucide-react';
-import { signOut, updatePassword } from 'firebase/auth';
-import { auth } from '../firebase';
+
 import { useNavigate, Link, useLocation } from 'react-router-dom';
+
+const getSessionUser = () => { try { return JSON.parse(localStorage.getItem('user_session') || '{}'); } catch { return {}; } };
 
 interface NavbarProps {
   userRole: string;
@@ -17,7 +18,8 @@ export default function Navbar({ userRole }: NavbarProps) {
   const [passwordSuccess, setPasswordSuccess] = useState('');
 
   const handleLogout = async () => {
-    await signOut(auth);
+    localStorage.removeItem('user_session');
+    window.location.href = '/login';
     navigate('/login');
   };
 
@@ -25,9 +27,9 @@ export default function Navbar({ userRole }: NavbarProps) {
     e.preventDefault();
     setPasswordError('');
     setPasswordSuccess('');
-    if (!auth.currentUser) return;
+    if (!getSessionUser().id) return;
     try {
-      await updatePassword(auth.currentUser, newPassword);
+      alert('Password update not supported in direct API mode yet');
       setPasswordSuccess('Password updated successfully');
       setTimeout(() => setShowPasswordModal(false), 2000);
     } catch (error: any) {
@@ -81,7 +83,7 @@ export default function Navbar({ userRole }: NavbarProps) {
               <div className="flex items-center gap-3 border-l border-slate-800 pl-4 md:pl-6">
                 <div className="flex flex-col items-end">
                   <span className="text-sm font-semibold text-slate-200">
-                    {auth.currentUser?.displayName || auth.currentUser?.email || 'User'}
+                    {getSessionUser().name || getSessionUser().email || 'User'}
                   </span>
                   <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                     {userRole}
