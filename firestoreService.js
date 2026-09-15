@@ -331,7 +331,6 @@ async function flushLogs() {
   for (const log of logsToProcess) {
     try {
       await database.collection('messages_log').add(log);
-      await database.collection('messageLogs').add(log).catch(() => {});
     } catch (err) {
       // quiet log
     }

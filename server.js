@@ -12,7 +12,10 @@ import {
   getSessionStatus, 
   logoutSession, 
   sendWhatsAppMessage, 
-  autoRestoreSessions 
+  autoRestoreSessions,
+  activeSockets,
+  activeQRCodes,
+  activeUserStatuses
 } from './whatsappManager.js';
 import { 
   getUserRole, 
@@ -318,6 +321,11 @@ app.get('/api/session/status', requireAuth, async (req, res) => {
     console.error(`[SessionStatus] Error for user ${req.userId}:`, error);
     res.status(500).json({ error: 'Failed to get session status' });
   }
+});
+
+app.get('/api/session/qr', requireAuth, (req, res) => {
+  const qr = activeQRCodes.get(req.userId) || null;
+  res.json({ qr });
 });
 
 // Backward compatibility routes

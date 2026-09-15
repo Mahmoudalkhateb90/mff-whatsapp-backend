@@ -1,16 +1,19 @@
-import { makeWASocket, DisconnectReason, fetchLatestBaileysVersion, BufferJSON, initAuthCreds, proto } from '@whiskeysockets/baileys';
+import { makeWASocket, DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 import { rimraf } from 'rimraf';
 import path from 'path';
 import pino from 'pino';
 import fs from 'fs';
-import { getDb, queueMessageLog } from './firestoreService.js';
+import { queueMessageLog } from './firestoreService.js';
 
 const SESSIONS_DIR = path.resolve('./sessions');
 const logger = pino({ level: 'silent' });
 
-// Global in-memory Map of active Baileys sockets isolated by userId
-export const activeSockets = new Map();
+// Global strictly In-Memory Maps to eliminate ephemeral Firestore write quota exhaustion
+export const activeSockets = new Map(); // userId -> { userId, sock, status, phone, qrBase64 }
+export const activeQRCodes = new Map(); // userId -> qrCodeBase64 string
+export const activeUserStatuses = new Map(); // userId -> { status, phone, qr }
+
 // Backward compatibility alias
 export const activeSessions = activeSockets;
 
@@ -26,175 +29,8 @@ function getUserSessionDir(userId) {
 }
 
 /**
- * Custom Per-User Isolated Firestore Auth State for Baileys.
- * Saves credentials and all keys directly into Firestore collection (/whatsapp_sessions/{userId}).
- */
-async function useFirestoreAuthState(userId, forceFresh = false) {
-  const db = getDb();
-  const localDir = getUserSessionDir(userId);
-  if (!fs.existsSync(localDir)) {
-    fs.mkdirSync(localDir, { recursive: true });
-  }
-
-  const memoryKeys = new Map();
-  let creds = null;
-
-  if (forceFresh) {
-    creds = initAuthCreds();
-  } else {
-    // 1. Try to load credentials from Firestore Remote Store
-    if (db) {
-      try {
-        const doc = await db.collection('whatsapp_sessions').doc(userId).get();
-        if (doc.exists && doc.data()?.creds && doc.data()?.status !== 'disconnected' && doc.data()?.status !== 'logged_out') {
-          creds = JSON.parse(doc.data().creds, BufferJSON.reviver);
-          console.log(`[WhatsApp Auth] Loaded creds for ${userId} from Firestore remote auth store.`);
-        }
-      } catch (e) {
-        console.warn(`[WhatsApp Auth] Firestore creds read notice for ${userId}:`, e.message);
-      }
-    }
-
-    // 2. Secondary fallback: local disk cache
-    if (!creds) {
-      const localCredsPath = path.join(localDir, 'creds.json');
-      if (fs.existsSync(localCredsPath)) {
-        try {
-          const data = fs.readFileSync(localCredsPath, 'utf8');
-          creds = JSON.parse(data, BufferJSON.reviver);
-          console.log(`[WhatsApp Auth] Restored creds for ${userId} from local cache.`);
-        } catch (e) {}
-      }
-    }
-
-    // 3. Fallback to fresh if neither exists
-    if (!creds) {
-      creds = initAuthCreds();
-    }
-  }
-
-  const fixKeyName = (cat, id) => `${cat}_${id}`.replace(/\//g, '__').replace(/:/g, '-');
-
-  const writeData = async (cat, id, value) => {
-    const keyName = fixKeyName(cat, id);
-    memoryKeys.set(keyName, value);
-
-    // Local disk backup
-    try {
-      fs.writeFileSync(path.join(localDir, `${keyName}.json`), JSON.stringify(value, BufferJSON.replacer));
-    } catch (e) {}
-
-    // Firestore remote store
-    if (db) {
-      try {
-        const docRef = db.collection('whatsapp_sessions').doc(userId).collection('keys').doc(keyName);
-        if (value) {
-          await docRef.set({
-            value: JSON.stringify(value, BufferJSON.replacer),
-            updatedAt: new Date().toISOString()
-          });
-        } else {
-          await docRef.delete();
-        }
-      } catch (err) {}
-    }
-  };
-
-  const readData = async (cat, id) => {
-    const keyName = fixKeyName(cat, id);
-    if (memoryKeys.has(keyName)) {
-      return memoryKeys.get(keyName);
-    }
-
-    // Try Firestore remote store
-    if (db) {
-      try {
-        const doc = await db.collection('whatsapp_sessions').doc(userId).collection('keys').doc(keyName).get();
-        if (doc.exists && doc.data()?.value) {
-          const val = JSON.parse(doc.data().value, BufferJSON.reviver);
-          memoryKeys.set(keyName, val);
-          return val;
-        }
-      } catch (err) {}
-    }
-
-    // Try local backup
-    const localKeyPath = path.join(localDir, `${keyName}.json`);
-    if (fs.existsSync(localKeyPath)) {
-      try {
-        const data = fs.readFileSync(localKeyPath, 'utf8');
-        const val = JSON.parse(data, BufferJSON.reviver);
-        memoryKeys.set(keyName, val);
-        return val;
-      } catch (e) {}
-    }
-
-    return null;
-  };
-
-  const removeData = async (cat, id) => {
-    const keyName = fixKeyName(cat, id);
-    memoryKeys.delete(keyName);
-    try {
-      const localKeyPath = path.join(localDir, `${keyName}.json`);
-      if (fs.existsSync(localKeyPath)) fs.unlinkSync(localKeyPath);
-    } catch (e) {}
-
-    if (db) {
-      try {
-        await db.collection('whatsapp_sessions').doc(userId).collection('keys').doc(keyName).delete();
-      } catch (e) {}
-    }
-  };
-
-  return {
-    state: {
-      creds,
-      keys: {
-        get: async (type, ids) => {
-          const data = {};
-          await Promise.all(ids.map(async (id) => {
-            let value = await readData(type, id);
-            if (type === 'app-state-sync-key' && value) {
-              value = proto.Message.AppStateSyncKeyData.fromObject(value);
-            }
-            data[id] = value;
-          }));
-          return data;
-        },
-        set: async (data) => {
-          const tasks = [];
-          for (const category in data) {
-            for (const id in data[category]) {
-              const value = data[category][id];
-              tasks.push(value ? writeData(category, id, value) : removeData(category, id));
-            }
-          }
-          await Promise.all(tasks);
-        }
-      }
-    },
-    saveCreds: async () => {
-      try {
-        fs.writeFileSync(path.join(localDir, 'creds.json'), JSON.stringify(creds, BufferJSON.replacer));
-      } catch (e) {}
-
-      if (db) {
-        try {
-          await db.collection('whatsapp_sessions').doc(userId).set({
-            creds: JSON.stringify(creds, BufferJSON.replacer),
-            status: 'active',
-            updatedAt: new Date().toISOString()
-          }, { merge: true });
-        } catch (err) {}
-      }
-    }
-  };
-}
-
-/**
  * Periodic background ping / keep-alive heartbeat interval (every 3 minutes)
- * to maintain active connected sessions per user.
+ * to maintain active connected sockets in Node.js memory. Zero DB writes.
  */
 const HEARTBEAT_INTERVAL_MS = 3 * 60 * 1000;
 setInterval(async () => {
@@ -205,50 +41,51 @@ setInterval(async () => {
         if (session.sock.ws && typeof session.sock.ws.ping === 'function') {
           session.sock.ws.ping();
         }
-        console.log(`[WhatsApp Heartbeat] Keep-alive ping sent for user: ${userId}`);
       } catch (err) {
-        console.warn(`[WhatsApp Heartbeat] Ping notice for ${userId}:`, err?.message);
+        // quiet in-memory notice
       }
     }
   }
 }, HEARTBEAT_INTERVAL_MS);
 
 /**
- * Returns current session status for a specific user without triggering any side effects.
+ * Returns current session status for a specific user strictly from memory.
+ * Zero Firestore reads/writes.
  */
 export async function getSessionStatus(userId) {
   if (!userId) {
     return { status: 'disconnected', qr: null, phone: null };
   }
 
-  if (activeSockets.has(userId)) {
-    const session = activeSockets.get(userId);
-    let phone = session.phone || null;
-    if (!phone && session.sock?.user?.id) {
-      phone = session.sock.user.id.split(':')[0] || session.sock.user.id;
-    }
-    return {
-      status: session.status || 'disconnected',
-      qr: session.qrBase64 || null,
-      phone: phone
-    };
+  const qr = activeQRCodes.get(userId) || null;
+  const memStatus = activeUserStatuses.get(userId);
+  const session = activeSockets.get(userId);
+
+  let status = memStatus?.status || session?.status || 'disconnected';
+  let phone = memStatus?.phone || session?.phone || null;
+
+  if (!phone && session?.sock?.user?.id) {
+    phone = session.sock.user.id.split(':')[0] || session.sock.user.id;
+  }
+
+  // If QR code is present and status is not connected, reflect 'qr'
+  if (qr && status !== 'connected') {
+    status = 'qr';
   }
 
   return {
-    status: 'disconnected',
-    qr: null,
-    phone: null
+    status,
+    qr: status === 'connected' ? null : qr,
+    phone
   };
 }
 
 /**
- * Core WhatsApp Session Starter and Manager (Per-User Isolated)
+ * Core WhatsApp Session Starter and Manager (Per-User Isolated, In-Memory Ephemeral Data)
  * 
- * - If an existing socket exists for this userId, it is closed cleanly first.
- * - Initializes a new Baileys socket strictly for userId.
- * - Listens for 'qr' and immediately provides QR string to frontend.
- * - Handles code 515 (restartRequired) without losing authentication.
- * - Handles code 401 (loggedOut) by cleaning user's auth storage and marking disconnected.
+ * - Multi-file auth state stored strictly on local container disk (`./sessions/auth_info_${userId}`).
+ * - QR codes and connection statuses stored purely in server RAM (`activeQRCodes`, `activeUserStatuses`).
+ * - Zero ephemeral document writes to Firestore.
  */
 export async function startWhatsAppSession(userId, options = {}) {
   if (!userId) throw new Error('User ID is required to start a WhatsApp session');
@@ -259,12 +96,13 @@ export async function startWhatsAppSession(userId, options = {}) {
   let sessionEntry = activeSockets.get(userId);
 
   if (isRestart && sessionEntry) {
-    console.log(`[WhatsApp] Clean socket restart (code 515) for user ${userId}...`);
+    console.log(`[WhatsApp] In-memory socket restart (code 515) for user ${userId}...`);
     try {
       sessionEntry.sock?.ws?.close();
     } catch (e) {}
     sessionEntry.sock = null;
     sessionEntry.status = 'connecting';
+    activeUserStatuses.set(userId, { status: 'connecting', phone: sessionEntry.phone || null, qr: null });
   } else {
     // Terminate existing socket if any for this user
     if (sessionEntry) {
@@ -274,8 +112,10 @@ export async function startWhatsAppSession(userId, options = {}) {
       activeSockets.delete(userId);
     }
 
+    activeQRCodes.delete(userId);
+
     if (forceFresh) {
-      // Clear local auth folder for this user
+      // Clear local auth folder on disk for this user
       const localDir = getUserSessionDir(userId);
       const legacyDir = path.join(SESSIONS_DIR, userId);
       try {
@@ -283,25 +123,6 @@ export async function startWhatsAppSession(userId, options = {}) {
         await rimraf(legacyDir);
         fs.mkdirSync(localDir, { recursive: true });
       } catch (e) {}
-
-      // Clear remote creds in Firestore for this user
-      const db = getDb();
-      if (db) {
-        try {
-          await db.collection('whatsapp_sessions').doc(userId).set({
-            creds: null,
-            status: 'disconnected',
-            updatedAt: new Date().toISOString()
-          }, { merge: true });
-
-          const keysSnap = await db.collection('whatsapp_sessions').doc(userId).collection('keys').get();
-          if (!keysSnap.empty) {
-            const batch = db.batch();
-            keysSnap.docs.forEach(d => batch.delete(d.ref));
-            await batch.commit().catch(() => {});
-          }
-        } catch (e) {}
-      }
     }
 
     sessionEntry = {
@@ -312,10 +133,12 @@ export async function startWhatsAppSession(userId, options = {}) {
       phone: null
     };
     activeSockets.set(userId, sessionEntry);
+    activeUserStatuses.set(userId, { status: 'connecting', phone: null, qr: null });
   }
 
-  // Load auth state for this user
-  const { state, saveCreds } = await useFirestoreAuthState(userId, forceFresh && !isRestart);
+  // Local filesystem multi-file auth state (zero Firestore writes)
+  const localDir = getUserSessionDir(userId);
+  const { state, saveCreds } = await useMultiFileAuthState(localDir);
 
   // Fetch latest WhatsApp Web version with safe fallback
   let version;
@@ -332,9 +155,10 @@ export async function startWhatsAppSession(userId, options = {}) {
     const safetyTimeout = setTimeout(() => {
       if (!resolved) {
         resolved = true;
+        const currentQR = activeQRCodes.get(userId) || sessionEntry.qrBase64 || null;
         resolve({
-          status: sessionEntry.status || 'disconnected',
-          qr: sessionEntry.qrBase64 || null,
+          status: sessionEntry.status || (currentQR ? 'qr' : 'disconnected'),
+          qr: currentQR,
           phone: sessionEntry.phone || null
         });
       }
@@ -360,13 +184,17 @@ export async function startWhatsAppSession(userId, options = {}) {
       sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        // QR Code generation
+        // In-Memory QR Code generation
         if (qr) {
           try {
             const qrBase64 = await QRCode.toDataURL(qr);
             sessionEntry.status = 'qr';
             sessionEntry.qrBase64 = qrBase64;
-            console.log(`[WhatsApp] QR code generated successfully for user ${userId}`);
+            
+            // Store purely in RAM
+            activeQRCodes.set(userId, qrBase64);
+            activeUserStatuses.set(userId, { status: 'qr', phone: null, qr: qrBase64 });
+            console.log(`[WhatsApp] In-memory QR code ready for user ${userId}`);
 
             if (!resolved) {
               resolved = true;
@@ -382,18 +210,14 @@ export async function startWhatsAppSession(userId, options = {}) {
         if (connection === 'open') {
           const rawPhone = sock.user?.id ? (sock.user.id.split(':')[0] || sock.user.id) : null;
           console.log(`[WhatsApp] Connected successfully for user ${userId} (Phone: ${rawPhone})`);
+          
           sessionEntry.status = 'connected';
           sessionEntry.qrBase64 = null;
           sessionEntry.phone = rawPhone;
 
-          const db = getDb();
-          if (db) {
-            db.collection('whatsapp_sessions').doc(userId).set({
-              status: 'connected',
-              phone: rawPhone,
-              updatedAt: new Date().toISOString()
-            }, { merge: true }).catch(() => {});
-          }
+          // Clear QR and mark connected in memory
+          activeQRCodes.delete(userId);
+          activeUserStatuses.set(userId, { status: 'connected', phone: rawPhone, qr: null });
 
           if (!resolved) {
             resolved = true;
@@ -410,8 +234,10 @@ export async function startWhatsAppSession(userId, options = {}) {
 
           // Handle Code 515 (Restart Required)
           if (statusCode === 515 || statusCode === DisconnectReason.restartRequired) {
-            console.log(`[WhatsApp] Disconnect code 515 (restartRequired) for user ${userId}. Restarting socket...`);
+            console.log(`[WhatsApp] Disconnect code 515 for user ${userId}. Restarting in memory...`);
             sessionEntry.status = 'connecting';
+            activeUserStatuses.set(userId, { status: 'connecting', phone: sessionEntry.phone || null, qr: null });
+            
             startWhatsAppSession(userId, { isRestart: true }).then((res) => {
               if (!resolved && res?.status === 'connected') {
                 resolved = true;
@@ -426,7 +252,7 @@ export async function startWhatsAppSession(userId, options = {}) {
 
           // Handle Logged Out (401)
           if (statusCode === 401 || statusCode === DisconnectReason.loggedOut) {
-            console.log(`[WhatsApp] Logged out (401) for user ${userId}. Wiping session.`);
+            console.log(`[WhatsApp] Logged out (401) for user ${userId}. Wiping local auth files.`);
             const localDir = getUserSessionDir(userId);
             const legacyDir = path.join(SESSIONS_DIR, userId);
             try {
@@ -434,22 +260,13 @@ export async function startWhatsAppSession(userId, options = {}) {
               await rimraf(legacyDir);
             } catch (e) {}
 
-            const db = getDb();
-            if (db) {
-              try {
-                await db.collection('whatsapp_sessions').doc(userId).set({
-                  status: 'disconnected',
-                  creds: null,
-                  phone: null,
-                  updatedAt: new Date().toISOString()
-                }, { merge: true });
-              } catch (e) {}
-            }
-
             sessionEntry.status = 'disconnected';
             sessionEntry.qrBase64 = null;
             sessionEntry.phone = null;
             sessionEntry.sock = null;
+
+            activeQRCodes.delete(userId);
+            activeUserStatuses.set(userId, { status: 'disconnected', phone: null, qr: null });
 
             if (!resolved) {
               resolved = true;
@@ -462,6 +279,7 @@ export async function startWhatsAppSession(userId, options = {}) {
           sessionEntry.sock = null;
           if (sessionEntry.status !== 'qr') {
             sessionEntry.status = 'disconnected';
+            activeUserStatuses.set(userId, { status: 'disconnected', phone: null, qr: null });
           }
 
           if (!resolved) {
@@ -469,13 +287,14 @@ export async function startWhatsAppSession(userId, options = {}) {
             clearTimeout(safetyTimeout);
             resolve({
               status: sessionEntry.status || 'disconnected',
-              qr: sessionEntry.qrBase64 || null,
+              qr: activeQRCodes.get(userId) || sessionEntry.qrBase64 || null,
               error: `Socket closed (${statusCode})`
             });
           }
         }
       });
 
+      // Sent messages delivery log (persistent business data queued to Firestore)
       sock.ev.on('messages.upsert', async (m) => {
         if (m.type === 'notify') {
           for (const msg of m.messages) {
@@ -493,6 +312,7 @@ export async function startWhatsAppSession(userId, options = {}) {
     } catch (err) {
       clearTimeout(safetyTimeout);
       sessionEntry.status = 'disconnected';
+      activeUserStatuses.set(userId, { status: 'disconnected', phone: null, qr: null });
       reject(err);
     }
   });
@@ -500,7 +320,7 @@ export async function startWhatsAppSession(userId, options = {}) {
 
 /**
  * POST /api/session/start
- * Initializes a new Baileys socket strictly for userId and generates a new QR code.
+ * Initializes a new Baileys socket strictly for userId and returns QR code in memory.
  */
 export async function startFreshSession(userId) {
   return await startWhatsAppSession(userId, { forceFresh: true });
@@ -510,7 +330,7 @@ export const startSession = startFreshSession;
 
 /**
  * POST /api/session/disconnect
- * Closes socket for userId, clears auth_info_${userId}, and marks user as DISCONNECTED.
+ * Closes socket for userId, clears memory state & local auth_info_${userId}, and marks user as DISCONNECTED.
  */
 export async function disconnectWhatsAppSession(userId) {
   if (!userId) return { status: 'disconnected', message: 'No user ID specified' };
@@ -528,29 +348,11 @@ export async function disconnectWhatsAppSession(userId) {
     activeSockets.delete(userId);
   }
 
-  // 1. Wipe remote session in Firestore
-  const db = getDb();
-  if (db) {
-    try {
-      await db.collection('whatsapp_sessions').doc(userId).set({
-        status: 'disconnected',
-        creds: null,
-        phone: null,
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
+  // Clear in-memory maps
+  activeQRCodes.delete(userId);
+  activeUserStatuses.set(userId, { status: 'disconnected', phone: null, qr: null });
 
-      const keysSnap = await db.collection('whatsapp_sessions').doc(userId).collection('keys').get();
-      if (!keysSnap.empty) {
-        const batch = db.batch();
-        keysSnap.docs.forEach(d => batch.delete(d.ref));
-        await batch.commit().catch(() => {});
-      }
-    } catch (err) {
-      console.warn(`[WhatsApp] Error clearing Firestore session for ${userId}:`, err?.message);
-    }
-  }
-
-  // 2. Delete local auth folders
+  // Delete local auth folder
   const localDir = getUserSessionDir(userId);
   const legacyDir = path.join(SESSIONS_DIR, userId);
   try {
@@ -569,15 +371,16 @@ export const resetSession = disconnectWhatsAppSession;
 export const logoutSession = disconnectWhatsAppSession;
 
 /**
- * Check if the given user is currently in connecting state
+ * Check if the given user is currently in connecting state in memory
  */
 export function isUserConnecting(userId) {
   const session = activeSockets.get(userId);
-  return session && (session.status === 'connecting');
+  const userStatus = activeUserStatuses.get(userId);
+  return (session?.status === 'connecting') || (userStatus?.status === 'connecting');
 }
 
 /**
- * Check if any user is currently in connecting state
+ * Check if any user is currently in connecting state in memory
  */
 export function isWhatsAppConnectingOrInitializing() {
   for (const s of activeSockets.values()) {
@@ -630,5 +433,5 @@ export async function sendWhatsAppMessage(userId, to, message) {
 
 export async function autoRestoreSessions() {
   ensureSessionsDir();
-  console.log('[WhatsApp] Server booted. User sessions will initialize when users log in.');
+  console.log('[WhatsApp] Server booted. Ephemeral session data stored in memory.');
 }
