@@ -215,12 +215,6 @@ export async function startWhatsAppSession(userId, options = {}) {
           sessionEntry.status = 'connected';
           sessionEntry.qrBase64 = null;
           sessionEntry.phone = rawPhone;
-          sessionEntry.sock = sock;
-          sessionEntry.user = sock.user;
-          sessionEntry.sendMessage = (jid, content, options) => sock.sendMessage(jid, content, options);
-          
-          // MUST ensure the socket is saved back into the global map for Bulk Queue
-          activeSockets.set(userId, sessionEntry);
 
           // Clear QR and mark connected in memory
           activeQRCodes.delete(userId);
@@ -416,21 +410,9 @@ export async function sendWhatsAppMessageDirect(userId, to, message) {
     throw new Error('User ID is required to send WhatsApp messages');
   }
 
-  let session = activeSockets.get(userId);
+  const session = activeSockets.get(userId);
 
-  // Fallback: If not found under exact userId, check if single connected session exists
-  if ((!session || (!session.sock && !session.sendMessage)) && activeSockets.size > 0) {
-    for (const [key, val] of activeSockets.entries()) {
-      if ((val?.status === 'connected' && val?.sock) || (val?.sendMessage && typeof val?.sendMessage === 'function') || (val?.ws && val?.sendMessage)) {
-        session = val;
-        break;
-      }
-    }
-  }
-
-  const actualSock = session?.sock || (typeof session?.sendMessage === 'function' ? session : null);
-
-  if (!session || !actualSock || (session.status && session.status !== 'connected' && !session.sendMessage)) {
+  if (!session || !session.sock || session.status !== 'connected') {
     throw new Error(`WhatsApp session not connected for this user (${userId})`);
   }
 
@@ -443,8 +425,8 @@ export async function sendWhatsAppMessageDirect(userId, to, message) {
     const jid = `${formattedPhone}@s.whatsapp.net`;
     const textToSend = message.trim();
 
-    const result = await actualSock.sendMessage(jid, { text: textToSend });
-    return { success: true, messageId: result?.key?.id || result?.id || `msg_${Date.now()}` };
+    const result = await session.sock.sendMessage(jid, { text: textToSend });
+    return { success: true, messageId: result.key?.id };
   } catch (err) {
     console.error(`[WhatsApp] Send message error for user ${userId} to ${to}:`, err?.message || err);
     throw new Error('Failed to send WhatsApp message: ' + (err?.message || 'Unknown error'));
