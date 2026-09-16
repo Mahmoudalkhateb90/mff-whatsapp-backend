@@ -50,7 +50,7 @@ export default function BulkBroadcast() {
   const toast = useToast();
   const isAr = language === 'ar';
   const user = getSessionUser();
-  const userId = user?.id || 'default';
+  const userId = user?.id || localStorage.getItem('user_id') || 'default';
   const isSuper = user?.role === 'Super Admin';
   const hasBulkPermission = isSuper || user?.permissions?.canSendBulk === true;
 
@@ -104,8 +104,9 @@ export default function BulkBroadcast() {
     try {
       const res = await fetch(`${API_BASE_URL}/api/campaigns/active`, {
         headers: {
-          'x-user-id': user.id || '',
-          'x-user-email': user.email || ''
+          'x-user-id': user.id || userId,
+          'x-user-email': user.email || '',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || user.id || userId}`
         }
       });
       if (res.ok) {

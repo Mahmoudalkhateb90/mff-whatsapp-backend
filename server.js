@@ -127,8 +127,20 @@ app.post('/api/login', async (req, res) => {
 });
 
 export async function requireAuth(req, res, next) {
-  const userId = req.headers['x-user-id'];
+  let userId = req.headers['x-user-id'];
   const userEmail = req.headers['x-user-email'];
+  const authHeader = req.headers['authorization'];
+
+  if (!userId && authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7).trim();
+    if (token && token !== 'undefined' && token !== 'null') {
+      userId = token;
+    }
+  }
+
+  if (!userId && req.body?.userId) {
+    userId = req.body.userId;
+  }
 
   if (!userId && !userEmail) {
     return res.status(401).json({ error: 'Missing x-user-id header' });
@@ -147,8 +159,20 @@ export async function requireAuth(req, res, next) {
 }
 
 export async function requireSuperAdmin(req, res, next) {
-  const userId = req.headers['x-user-id'];
+  let userId = req.headers['x-user-id'];
   const userEmail = req.headers['x-user-email'];
+  const authHeader = req.headers['authorization'];
+
+  if (!userId && authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7).trim();
+    if (token && token !== 'undefined' && token !== 'null') {
+      userId = token;
+    }
+  }
+
+  if (!userId && req.body?.userId) {
+    userId = req.body.userId;
+  }
 
   if (userId === 'super-admin' || userEmail === 'mahmoud.alkhateeb@money.jo') {
     req.userRole = 'Super Admin';
@@ -414,22 +438,43 @@ app.get('/api/queue/stats', requireAuth, (req, res) => {
 // Campaign Engine Endpoints
 const handleCreateCampaign = async (req, res) => {
   try {
-    const { name, items, delaySeconds, messageTemplate } = req.body;
+    let { name, items, contacts, numbers, recipients, delaySeconds, messageTemplate, message } = req.body;
     const targetUserId = req.userId || req.body?.userId || req.headers['x-user-id'];
 
     if (!targetUserId) {
       return res.status(401).json({ error: 'Unauthorized: Missing user ID' });
     }
 
-    if (!items || !Array.isArray(items) || items.length === 0) {
+    // Normalize items from various formats
+    let rawItems = items || contacts || recipients;
+    const template = messageTemplate || message || '';
+
+    if (!rawItems && Array.isArray(numbers)) {
+      rawItems = numbers.map(num => ({
+        phone: typeof num === 'string' ? num : num.phone || num.number,
+        message: (typeof num === 'object' ? num.message : '') || template
+      }));
+    } else if (Array.isArray(rawItems)) {
+      rawItems = rawItems.map(it => {
+        if (typeof it === 'string') {
+          return { phone: it, message: template };
+        }
+        return {
+          phone: it.phone || it.number || it.to,
+          message: it.message || template
+        };
+      });
+    }
+
+    if (!rawItems || !Array.isArray(rawItems) || rawItems.length === 0) {
       return res.status(400).json({ error: 'At least one contact item is required' });
     }
 
     const campaign = await createCampaign({
-      name,
-      items,
-      delaySeconds,
-      messageTemplate,
+      name: name || `Campaign ${new Date().toLocaleDateString()}`,
+      items: rawItems,
+      delaySeconds: delaySeconds || req.body?.throttleDelay || 3,
+      messageTemplate: template,
       userId: targetUserId
     });
     // Immediately respond with 202 Accepted to prevent UI lag or freeze
@@ -446,6 +491,9 @@ const handleCreateCampaign = async (req, res) => {
 
 app.post('/api/campaigns/create', requireAuth, requireBulkPermission, handleCreateCampaign);
 app.post('/api/broadcast/start', requireAuth, requireBulkPermission, handleCreateCampaign);
+app.post('/api/messages/bulk', requireAuth, requireBulkPermission, handleCreateCampaign);
+app.post('/api/bulk-message', requireAuth, requireBulkPermission, handleCreateCampaign);
+app.post('/api/bulk/send', requireAuth, requireBulkPermission, handleCreateCampaign);
 
 // Stop / Cancel endpoints (Purely In-Memory instant halt)
 const handleStopCampaign = async (req, res) => {

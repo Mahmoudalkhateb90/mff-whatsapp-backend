@@ -150,11 +150,24 @@ async function runWorker() {
       }
 
       // Explicit socket check for the user
-      const userSock = activeSockets.get(targetUserId);
+      let userSock = activeSockets.get(targetUserId);
+
+      // Fallback: If not found under exact targetUserId, check active connected sockets
+      if ((!userSock || (!userSock.sock && !userSock.sendMessage)) && activeSockets.size > 0) {
+        for (const [key, val] of activeSockets.entries()) {
+          if ((val?.status === 'connected' && val?.sock) || (val?.sendMessage && typeof val?.sendMessage === 'function') || (val?.ws && val?.sendMessage)) {
+            userSock = val;
+            break;
+          }
+        }
+      }
+
+      const actualSock = userSock?.sock || (typeof userSock?.sendMessage === 'function' ? userSock : null);
+      const isConnected = userSock?.status === 'connected' || (actualSock && typeof actualSock.sendMessage === 'function');
 
       // Graceful Queue Session Handling: If this user's WhatsApp socket is temporarily connecting or restarting,
       // pause queue worker for 3 seconds instead of failing messages immediately.
-      if (targetUserId && isUserConnecting(targetUserId) && (!userSock || userSock.status !== 'connected')) {
+      if (targetUserId && isUserConnecting(targetUserId) && (!userSock || !isConnected)) {
         console.log(`[MessageQueue] WhatsApp socket for user ${targetUserId} is connecting. Pausing queue worker for 3 seconds...`);
         if (type === 'single') {
           highPriorityQueue.unshift(item);
@@ -167,7 +180,7 @@ async function runWorker() {
       }
 
       // If user socket is null/undefined or disconnected:
-      if (!userSock || !userSock.sock || userSock.status !== 'connected') {
+      if (!userSock || !actualSock || !isConnected) {
         const errorMsg = 'FAILED: WhatsApp session disconnected for this user';
         console.warn(`[MessageQueue] Socket not connected for user ${targetUserId}. Failing message to ${item.to}...`);
 
