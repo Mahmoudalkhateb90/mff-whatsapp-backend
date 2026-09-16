@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { API_BASE_URL } from '../config';
 import { useLanguage } from '../context/LanguageContext';
+import { useToast } from '../context/ToastContext';
 
 const getSessionUser = () => { 
   try { 
@@ -45,7 +46,9 @@ interface ActiveCampaignState {
 }
 
 export default function BulkBroadcast() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  const toast = useToast();
+  const isAr = language === 'ar';
   const user = getSessionUser();
   const userId = user?.id || 'default';
   const isSuper = user?.role === 'Super Admin';
@@ -66,6 +69,7 @@ export default function BulkBroadcast() {
   const [messageTemplate, setMessageTemplate] = useState(() => localStorage.getItem(getStorageKey('template')) || '');
   const [throttleDelay, setThrottleDelay] = useState('3');
   const [submitting, setSubmitting] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [activeCampaign, setActiveCampaign] = useState<ActiveCampaignState | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
@@ -326,7 +330,8 @@ export default function BulkBroadcast() {
         headers: {
           'Content-Type': 'application/json',
           'x-user-id': user.id || userId,
-          'x-user-email': user.email || ''
+          'x-user-email': user.email || '',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || user.id || userId}`
         },
         body: JSON.stringify({
           name: campaignName.trim() || `Campaign ${new Date().toLocaleDateString()}`,
@@ -343,19 +348,46 @@ export default function BulkBroadcast() {
         dismissedCampaignIdRef.current = null;
         setActiveCampaign(campaign);
         if (campaign.status === 'failed') {
+          const failMsg = campaign.errorMessage || 'FAILED: WhatsApp session disconnected for this user';
           setStatusMessage({ 
             type: 'error', 
-            text: campaign.errorMessage || 'FAILED: WhatsApp session disconnected for this user' 
+            text: failMsg
+          });
+          toast.error(`[Error: 400] ${failMsg}`, {
+            status: 400,
+            url: `${API_BASE_URL}/api/campaigns/create`,
+            message: failMsg,
+            rawError: campaign,
+            actionName: 'Bulk Campaign Launch'
           });
         } else {
-          setStatusMessage({ type: 'success', text: 'Campaign queued and running sequentially in background!' });
+          const successMsg = isAr ? 'تم إطلاق الحملة بنجاح وجاري إرسال الرسائل في الخلفية!' : 'Campaign queued and running sequentially in background!';
+          setStatusMessage({ type: 'success', text: successMsg });
+          toast.success(successMsg);
         }
       } else {
-        const err = await res.json().catch(() => ({ error: 'Failed to start campaign' }));
-        setStatusMessage({ type: 'error', text: err.error || 'Failed to start campaign' });
+        const errData = await res.json().catch(() => ({ error: 'Failed to start campaign' }));
+        const errMsg = errData.error || `Server Error: ${res.status}`;
+        const fullErr = `[Error: ${res.status}] ${errMsg}`;
+        setStatusMessage({ type: 'error', text: fullErr });
+        toast.error(fullErr, {
+          status: res.status,
+          url: `${API_BASE_URL}/api/campaigns/create`,
+          message: errMsg,
+          rawError: errData,
+          actionName: 'Bulk Campaign Launch'
+        });
       }
     } catch (err: any) {
-      setStatusMessage({ type: 'error', text: err.message || 'Network error occurred' });
+      const netErr = `[Network Error] ${err.message || 'Network error occurred'}`;
+      setStatusMessage({ type: 'error', text: netErr });
+      toast.error(netErr, {
+        status: 0,
+        url: `${API_BASE_URL}/api/campaigns/create`,
+        message: err.message,
+        rawError: err,
+        actionName: 'Bulk Campaign Launch'
+      });
     } finally {
       setSubmitting(false);
     }
@@ -366,13 +398,31 @@ export default function BulkBroadcast() {
     try {
       const res = await fetch(`${API_BASE_URL}/api/campaigns/${activeCampaign.id}/pause`, {
         method: 'POST',
-        headers: { 'x-user-id': user.id || '', 'x-user-email': user.email || '' }
+        headers: { 
+          'x-user-id': user.id || userId, 
+          'x-user-email': user.email || '',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || user.id || userId}`
+        }
       });
       if (res.ok) {
         setActiveCampaign(prev => prev ? { ...prev, status: 'paused' } : null);
+        toast.info(isAr ? 'تم إيقاف الحملة مؤقتاً' : 'Campaign paused.');
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        toast.error(`[Error: ${res.status}] ${errData.error || 'Failed to pause campaign'}`, {
+          status: res.status,
+          url: `/api/campaigns/${activeCampaign.id}/pause`,
+          message: errData.error,
+          rawError: errData,
+          actionName: 'Pause Campaign'
+        });
       }
-    } catch (e) {
-      console.error('Pause failed', e);
+    } catch (e: any) {
+      toast.error(`[Network Error] ${e.message}`, {
+        status: 0,
+        message: e.message,
+        actionName: 'Pause Campaign'
+      });
     }
   };
 
@@ -381,28 +431,67 @@ export default function BulkBroadcast() {
     try {
       const res = await fetch(`${API_BASE_URL}/api/campaigns/${activeCampaign.id}/resume`, {
         method: 'POST',
-        headers: { 'x-user-id': user.id || '', 'x-user-email': user.email || '' }
+        headers: { 
+          'x-user-id': user.id || userId, 
+          'x-user-email': user.email || '',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || user.id || userId}`
+        }
       });
       if (res.ok) {
         setActiveCampaign(prev => prev ? { ...prev, status: 'running' } : null);
+        toast.info(isAr ? 'تم استئناف الحملة بنجاح' : 'Campaign resumed.');
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        toast.error(`[Error: ${res.status}] ${errData.error || 'Failed to resume campaign'}`, {
+          status: res.status,
+          url: `/api/campaigns/${activeCampaign.id}/resume`,
+          message: errData.error,
+          rawError: errData,
+          actionName: 'Resume Campaign'
+        });
       }
-    } catch (e) {
-      console.error('Resume failed', e);
+    } catch (e: any) {
+      toast.error(`[Network Error] ${e.message}`, {
+        status: 0,
+        message: e.message,
+        actionName: 'Resume Campaign'
+      });
     }
   };
 
   const handleCancel = async () => {
-    if (!activeCampaign?.id) return;
+    if (!activeCampaign?.id || stopping) return;
+    setStopping(true);
     try {
       const res = await fetch(`${API_BASE_URL}/api/campaigns/${activeCampaign.id}/cancel`, {
         method: 'POST',
-        headers: { 'x-user-id': user.id || '', 'x-user-email': user.email || '' }
+        headers: { 
+          'x-user-id': user.id || userId, 
+          'x-user-email': user.email || '',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || user.id || userId}`
+        }
       });
       if (res.ok) {
         setActiveCampaign(prev => prev ? { ...prev, status: 'cancelled' } : null);
+        toast.info(isAr ? 'تم إيقاف الحملة بنجاح' : 'Campaign stopped.');
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        toast.error(`[Error: ${res.status}] ${errData.error || 'Failed to stop campaign'}`, {
+          status: res.status,
+          url: `/api/campaigns/${activeCampaign.id}/cancel`,
+          message: errData.error,
+          rawError: errData,
+          actionName: 'Cancel Campaign'
+        });
       }
-    } catch (e) {
-      console.error('Cancel failed', e);
+    } catch (e: any) {
+      toast.error(`[Network Error] ${e.message}`, {
+        status: 0,
+        message: e.message,
+        actionName: 'Cancel Campaign'
+      });
+    } finally {
+      setStopping(false);
     }
   };
 
@@ -590,14 +679,14 @@ export default function BulkBroadcast() {
               <button
                 type="submit"
                 id="btn-submit-campaign"
-                disabled={submitting || total === 0 || !hasBulkPermission}
+                disabled={submitting || stopping || total === 0 || !hasBulkPermission}
                 title={!hasBulkPermission ? t('noBulkPermission') : undefined}
-                className="w-full py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white font-bold rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
               >
                 {submitting ? (
                   <>
                     <Loader2 className="w-5 h-5 animate-spin" />
-                    <span>{t('authenticating')}</span>
+                    <span>{t('processingAndStartingCampaign') || 'جاري معالجة الملف وإطلاق الحملة...'}</span>
                   </>
                 ) : (
                   <>
@@ -691,10 +780,20 @@ export default function BulkBroadcast() {
                     type="button"
                     id="btn-cancel-campaign"
                     onClick={handleCancel}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 rounded-lg text-sm font-semibold transition-colors"
+                    disabled={stopping}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <Square className="w-4 h-4" />
-                    <span>{t('cancelCampaign')}</span>
+                    {stopping ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>{t('stoppingCampaign') || 'جاري إيقاف الحملة...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Square className="w-4 h-4" />
+                        <span>{t('cancelCampaign')}</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>

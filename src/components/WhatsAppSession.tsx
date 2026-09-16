@@ -25,6 +25,22 @@ export default function WhatsAppSession() {
   } = useSession();
   const { t } = useLanguage();
 
+  const handleGenerateQR = () => {
+    let activeId: string | undefined;
+    try {
+      const raw = localStorage.getItem('user_session');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.id) activeId = String(parsed.id);
+      }
+      if (!activeId) {
+        const direct = localStorage.getItem('user_id');
+        if (direct) activeId = String(direct);
+      }
+    } catch {}
+    startSession(activeId);
+  };
+
   const isDisconnected = status === 'disconnected' || status === 'idle';
   const isConnected = status === 'connected';
   const isQR = status === 'qr' && !!qrBase64;
@@ -131,15 +147,15 @@ export default function WhatsAppSession() {
               <div className="flex flex-col gap-3">
                 <button
                   id="btn-generate-my-qr"
-                  onClick={startSession}
-                  disabled={actionLoading === 'start'}
+                  onClick={handleGenerateQR}
+                  disabled={actionLoading === 'start' || actionLoading === 'disconnect'}
                   className="w-full flex items-center justify-center gap-2.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-semibold py-4 px-6 rounded-xl transition-all shadow-lg shadow-emerald-900/20 disabled:opacity-60 text-base"
                 >
-                  <QrCode className={`w-5 h-5 ${actionLoading === 'start' ? 'animate-pulse' : ''}`} />
+                  <QrCode className={`w-5 h-5 ${actionLoading === 'start' ? 'animate-spin' : ''}`} />
                   <span>
                     {actionLoading === 'start' 
-                      ? (t('generatingQR', 'Generating QR Code...')) 
-                      : (t('generateMyQR', 'Generate My QR Code'))}
+                      ? (t('generatingQRAndChecking') || 'جاري إنشاء كود الـ QR والتحقق من الجلسة...') 
+                      : (t('generateMyQR') || 'Generate My QR Code')}
                   </span>
                 </button>
               </div>
@@ -150,21 +166,25 @@ export default function WhatsAppSession() {
               <div className="flex flex-col sm:flex-row gap-3 pt-2">
                 <button
                   id="btn-regenerate-qr"
-                  onClick={startSession}
-                  disabled={actionLoading === 'start'}
+                  onClick={handleGenerateQR}
+                  disabled={actionLoading === 'start' || actionLoading === 'disconnect'}
                   className="flex-1 flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 font-semibold py-3 px-4 rounded-xl transition-colors disabled:opacity-50 text-sm"
                 >
                   <RefreshCw className={`w-4 h-4 ${actionLoading === 'start' ? 'animate-spin' : ''}`} />
-                  <span>{actionLoading === 'start' ? 'Refreshing...' : t('scanNewQR', 'Regenerate QR Code')}</span>
+                  <span>
+                    {actionLoading === 'start' 
+                      ? (t('generatingQRAndChecking') || 'جاري إنشاء كود الـ QR والتحقق من الجلسة...') 
+                      : (t('scanNewQR') || 'Regenerate QR Code')}
+                  </span>
                 </button>
                 <button
                   id="btn-cancel-qr"
                   onClick={disconnectSession}
-                  disabled={actionLoading === 'disconnect'}
+                  disabled={actionLoading === 'disconnect' || actionLoading === 'start'}
                   className="flex-1 flex items-center justify-center gap-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold py-3 px-4 rounded-xl transition-colors disabled:opacity-50 text-sm"
                 >
                   <LogOut className="w-4 h-4" />
-                  <span>{actionLoading === 'disconnect' ? 'Canceling...' : t('cancel', 'Cancel & Reset')}</span>
+                  <span>{actionLoading === 'disconnect' ? (t('stoppingCampaign') || 'Disconnecting...') : (t('cancel') || 'Cancel & Reset')}</span>
                 </button>
               </div>
             )}
@@ -175,24 +195,24 @@ export default function WhatsAppSession() {
                 <button
                   id="btn-disconnect-my-session"
                   onClick={disconnectSession}
-                  disabled={actionLoading === 'disconnect'}
+                  disabled={actionLoading === 'disconnect' || actionLoading === 'start'}
                   className="flex-1 flex items-center justify-center gap-2 bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 font-semibold py-3.5 px-4 rounded-xl transition-colors disabled:opacity-50 text-base"
                 >
                   <LogOut className="w-5 h-5" />
                   <span>
                     {actionLoading === 'disconnect' 
-                      ? 'Disconnecting...' 
-                      : (t('disconnectMySession', 'Disconnect My Session'))}
+                      ? (t('stoppingCampaign') || 'Disconnecting...') 
+                      : (t('disconnectMySession') || 'Disconnect My Session')}
                   </span>
                 </button>
                 <button
                   id="btn-switch-device-qr"
-                  onClick={startSession}
-                  disabled={actionLoading === 'start'}
+                  onClick={handleGenerateQR}
+                  disabled={actionLoading === 'start' || actionLoading === 'disconnect'}
                   className="flex-1 flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 font-semibold py-3.5 px-4 rounded-xl transition-colors disabled:opacity-50 text-base"
                 >
                   <QrCode className="w-5 h-5 text-emerald-400" />
-                  <span>{t('scanNewQR', 'Switch Device / New QR')}</span>
+                  <span>{actionLoading === 'start' ? (t('generatingQRAndChecking') || 'جاري إنشاء كود الـ QR والتحقق من الجلسة...') : (t('scanNewQR') || 'Switch Device / New QR')}</span>
                 </button>
               </div>
             )}
