@@ -17,7 +17,6 @@ import {
   Sliders
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
-import { useToast } from '../context/ToastContext';
 
 const getSessionUser = () => { 
   try { 
@@ -45,9 +44,7 @@ interface User {
 }
 
 export default function AdminPanel() {
-  const { t, language } = useLanguage();
-  const toast = useToast();
-  const isAr = language === 'ar';
+  const { t } = useLanguage();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -79,17 +76,14 @@ export default function AdminPanel() {
   // Reset Password Modal State
   const [resettingUser, setResettingUser] = useState<User | null>(null);
   const [resetPassword, setResetPassword] = useState('');
-  const [resettingPassword, setResettingPassword] = useState(false);
   const [showResetPassword, setShowResetPassword] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const getAuthHeaders = () => {
     const user = getSessionUser();
     return {
       'x-user-id': user.id || user.email || 'system_super_admin',
       'x-user-email': user.email || 'mahmoud.alkhateeb@money.jo',
-      'x-user-role': user.role || 'Super Admin',
-      'Authorization': `Bearer ${localStorage.getItem('auth_token') || user.id || ''}`
+      'x-user-role': user.role || 'Super Admin'
     };
   };
 
@@ -140,7 +134,6 @@ export default function AdminPanel() {
 
   const handleCreateUser = async (e: FormEvent) => {
     e.preventDefault();
-    if (creating) return;
     setCreating(true);
     setErrorMsg('');
     setSuccessMsg('');
@@ -178,34 +171,15 @@ export default function AdminPanel() {
         setNewTeamLeaderId('');
         setNewCanSendSingle(true);
         setNewCanSendBulk(false);
-        const createdMsg = t('userCreated') || 'User created successfully';
-        setSuccessMsg(createdMsg);
-        toast.success(createdMsg);
+        setSuccessMsg(t('userCreated'));
         fetchUsers();
         setTimeout(() => setSuccessMsg(''), 3000);
       } else {
-        const errData = await res.json().catch(() => ({ error: 'Failed to create user' }));
-        const errMsg = errData.error || `Server Error: ${res.status}`;
-        const fullErr = `[Error: ${res.status}] ${errMsg}`;
-        setErrorMsg(fullErr);
-        toast.error(fullErr, {
-          status: res.status,
-          url: `${API_BASE_URL}/api/users`,
-          message: errMsg,
-          rawError: errData,
-          actionName: 'Create User'
-        });
+        const err = await res.json().catch(() => ({ error: 'Failed to create user' }));
+        setErrorMsg(err.error || 'Failed to create user');
       }
     } catch (err: any) {
-      const netErr = `[Network Error] ${err.message || 'Error creating user'}`;
-      setErrorMsg(netErr);
-      toast.error(netErr, {
-        status: 0,
-        url: `${API_BASE_URL}/api/users`,
-        message: err.message,
-        rawError: err,
-        actionName: 'Create User'
-      });
+      setErrorMsg(err.message || 'Error creating user');
     } finally {
       setCreating(false);
     }
@@ -224,7 +198,7 @@ export default function AdminPanel() {
 
   const handleSaveEdit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!editingUser || savingEdit) return;
+    if (!editingUser) return;
     setSavingEdit(true);
     setEditError('');
 
@@ -265,31 +239,13 @@ export default function AdminPanel() {
         }
 
         setEditingUser(null);
-        toast.success(t('userUpdated') || 'User updated successfully');
         fetchUsers();
       } else {
-        const errData = await res.json().catch(() => ({ error: 'Failed to update user' }));
-        const errMsg = errData.error || `Server Error: ${res.status}`;
-        const fullErr = `[Error: ${res.status}] ${errMsg}`;
-        setEditError(fullErr);
-        toast.error(fullErr, {
-          status: res.status,
-          url: `${API_BASE_URL}/api/users/${editingUser.id}`,
-          message: errMsg,
-          rawError: errData,
-          actionName: 'Update User'
-        });
+        const err = await res.json().catch(() => ({ error: 'Failed to update user' }));
+        setEditError(err.error || 'Failed to update user');
       }
     } catch (err: any) {
-      const netErr = `[Network Error] ${err.message || 'Error updating user'}`;
-      setEditError(netErr);
-      toast.error(netErr, {
-        status: 0,
-        url: `${API_BASE_URL}/api/users/${editingUser.id}`,
-        message: err.message,
-        rawError: err,
-        actionName: 'Update User'
-      });
+      setEditError(err.message || 'Error updating user');
     } finally {
       setSavingEdit(false);
     }
@@ -297,8 +253,7 @@ export default function AdminPanel() {
 
   const handleResetPassword = async (e: FormEvent) => {
     e.preventDefault();
-    if (!resettingUser || resettingPassword) return;
-    setResettingPassword(true);
+    if (!resettingUser) return;
     try {
       const res = await fetch(`${API_BASE_URL}/api/users/${resettingUser.id}/reset-password`, {
         method: 'POST',
@@ -309,60 +264,30 @@ export default function AdminPanel() {
         body: JSON.stringify({ password: resetPassword })
       });
       if (res.ok) {
-        toast.success(t('passwordSuccess') || 'Password updated successfully');
+        alert(t('passwordSuccess'));
         setResettingUser(null);
         setResetPassword('');
       } else {
-        const err = await res.json().catch(() => ({}));
-        const errMsg = err.error || t('passwordError') || 'Failed to update password';
-        toast.error(`[Error: ${res.status}] ${errMsg}`, {
-          status: res.status,
-          url: `${API_BASE_URL}/api/users/${resettingUser.id}/reset-password`,
-          message: errMsg,
-          rawError: err,
-          actionName: 'Reset User Password'
-        });
+        const err = await res.json();
+        alert(err.error || t('passwordError'));
       }
-    } catch (err: any) {
-      toast.error(`[Network Error] ${err.message}`, {
-        status: 0,
-        message: err.message,
-        actionName: 'Reset User Password'
-      });
-    } finally {
-      setResettingPassword(false);
+    } catch (err) {
+      console.error(err);
     }
   };
 
   const handleDeleteUser = async (userId: string) => {
     if (!confirm(t('confirmDelete'))) return;
-    setDeletingId(userId);
     try {
       const res = await fetch(`${API_BASE_URL}/api/users/${userId}`, {
         method: 'DELETE',
         headers: { ...getAuthHeaders() }
       });
       if (res.ok) {
-        toast.success(isAr ? 'تم حذف المستخدم بنجاح' : 'User deleted successfully');
         fetchUsers();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        toast.error(`[Error: ${res.status}] ${err.error || 'Failed to delete user'}`, {
-          status: res.status,
-          url: `${API_BASE_URL}/api/users/${userId}`,
-          message: err.error,
-          rawError: err,
-          actionName: 'Delete User'
-        });
       }
-    } catch (err: any) {
-      toast.error(`[Network Error] ${err.message || 'Error deleting user'}`, {
-        status: 0,
-        message: err.message,
-        actionName: 'Delete User'
-      });
-    } finally {
-      setDeletingId(null);
+    } catch (err) {
+      console.error('Error deleting user:', err);
     }
   };
 
@@ -642,15 +567,10 @@ export default function AdminPanel() {
                               </button>
                               <button
                                 onClick={() => handleDeleteUser(user.id)}
-                                disabled={deletingId === user.id}
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-xs font-semibold transition-colors border border-transparent hover:border-rose-500/20 disabled:opacity-50"
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-xs font-semibold transition-colors border border-transparent hover:border-rose-500/20"
                                 title={t('deleteUser')}
                               >
-                                {deletingId === user.id ? (
-                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                ) : (
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                )}
+                                <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
                           </td>
@@ -835,10 +755,9 @@ export default function AdminPanel() {
                   </button>
                   <button
                     type="submit"
-                    disabled={resettingPassword}
-                    className="flex-1 py-2.5 px-4 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-semibold transition-colors shadow-lg shadow-rose-900/20 disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="flex-1 py-2.5 px-4 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-semibold transition-colors shadow-lg shadow-rose-900/20"
                   >
-                    {resettingPassword ? <Loader2 className="w-4 h-4 animate-spin" /> : t('confirmReset')}
+                    {t('confirmReset')}
                   </button>
                 </div>
               </form>

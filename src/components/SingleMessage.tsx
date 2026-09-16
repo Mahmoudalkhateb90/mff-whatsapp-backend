@@ -2,13 +2,11 @@ import React, { useState } from 'react';
 import { Send, Loader2, MessageSquare, ShieldAlert } from 'lucide-react';
 import { API_BASE_URL } from '../config';
 import { useLanguage } from '../context/LanguageContext';
-import { useToast } from '../context/ToastContext';
 
 const getSessionUser = () => { try { return JSON.parse(localStorage.getItem('user_session') || '{}'); } catch { return {}; } };
 
 export default function SingleMessage() {
   const { t } = useLanguage();
-  const toast = useToast();
   const user = getSessionUser();
   const isSuper = user.role === 'Super Admin';
   const hasPermission = isSuper || user.permissions?.canSendSingle !== false;
@@ -20,16 +18,8 @@ export default function SingleMessage() {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (loading) return;
     if (!hasPermission) {
-      const permMsg = t('noSinglePermission') || 'Access denied: No single messaging permission';
-      setStatus({ type: 'error', text: permMsg });
-      toast.error(`[Error: 403] ${permMsg}`, {
-        status: 403,
-        url: `${API_BASE_URL}/api/messages/single`,
-        message: permMsg,
-        actionName: 'Single Message Dispatch'
-      });
+      setStatus({ type: 'error', text: t('noSinglePermission') });
       return;
     }
     setLoading(true);
@@ -38,56 +28,36 @@ export default function SingleMessage() {
     try {
       const formattedPhone = phoneNumber.replace(/\D/g, '');
       const user = getSessionUser();
-      const res = await fetch(`${API_BASE_URL}/api/messages/single`, {
+      const res = await fetch(`${API_BASE_URL}/api/send-message`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': user.id || localStorage.getItem('user_id') || '',
-          'x-user-email': user.email || '',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token') || user.id || ''}`
+          'x-user-id': user.id || '',
+          'x-user-email': user.email || ''
         },
         body: JSON.stringify({
-          userId: user.id || localStorage.getItem('user_id'),
+          userId: user.id,
           to: `${formattedPhone}@s.whatsapp.net`,
           message
         })
       });
 
-      if (res.ok || res.status === 202) {
-        const successText = t('messageSentSuccess') || 'Message sent successfully!';
-        setStatus({ type: 'success', text: successText });
-        toast.success(successText);
+      if (res.ok) {
+        setStatus({ type: 'success', text: t('messageSentSuccess') });
         setPhoneNumber('');
         setMessage('');
       } else {
         let errorMessage = 'Failed to send message';
-        let rawError: any = {};
         try {
-          rawError = await res.json();
-          errorMessage = rawError.error || errorMessage;
-        } catch {
+          const errorData = await res.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch (e) {
           errorMessage = `Server Error: ${res.status}`;
         }
-        const fullErr = `[Error: ${res.status}] ${errorMessage}`;
-        setStatus({ type: 'error', text: fullErr });
-        toast.error(fullErr, {
-          status: res.status,
-          url: `${API_BASE_URL}/api/messages/single`,
-          message: errorMessage,
-          rawError,
-          actionName: 'Single Message Dispatch'
-        });
+        setStatus({ type: 'error', text: errorMessage });
       }
     } catch (err: any) {
-      const errText = err.message || 'An error occurred';
-      setStatus({ type: 'error', text: `[Network Error] ${errText}` });
-      toast.error(`[Network Error] ${errText}`, {
-        status: 0,
-        url: `${API_BASE_URL}/api/messages/single`,
-        message: errText,
-        rawError: err,
-        actionName: 'Single Message Dispatch'
-      });
+      setStatus({ type: 'error', text: err.message || 'An error occurred' });
     } finally {
       setLoading(false);
     }
@@ -128,9 +98,8 @@ export default function SingleMessage() {
               <input
                 type="text"
                 required
-                disabled={loading}
                 placeholder="962790000000"
-                className="w-full rtl:pr-8 rtl:pl-4 ltr:pl-8 ltr:pr-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-600 disabled:opacity-50"
+                className="w-full rtl:pr-8 rtl:pl-4 ltr:pl-8 ltr:pr-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-600"
                 value={phoneNumber}
                 onChange={(e) => setPhoneNumber(e.target.value)}
               />
@@ -144,9 +113,8 @@ export default function SingleMessage() {
             <textarea
               required
               rows={5}
-              disabled={loading}
               placeholder={t('typeMessagePlaceholder')}
-              className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-600 resize-none disabled:opacity-50"
+              className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white placeholder-slate-600 resize-none"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
             />
@@ -154,13 +122,12 @@ export default function SingleMessage() {
 
           <button
             type="submit"
-            id="btn-send-single-message"
             disabled={loading || !phoneNumber || !message || !hasPermission}
             title={!hasPermission ? t('noSinglePermission') : undefined}
-            className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3.5 px-4 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20"
+            className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20"
           >
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-            <span>{loading ? (t('sendingSingleMessage') || 'جاري إرسال الرسالة...') : t('sendMessage')}</span>
+            <span>{loading ? t('sending') : t('sendMessage')}</span>
           </button>
         </form>
       </div>
