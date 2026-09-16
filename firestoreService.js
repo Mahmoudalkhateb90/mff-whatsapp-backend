@@ -59,11 +59,11 @@ class CollectionWrapper {
       const res = await addDoc(colRef, cleanedData);
       return { id: res.id };
     } catch (err) {
-      if (err.message && (err.message.includes('RESOURCE_EXHAUSTED') || err.message.includes('quota') || err.code === 'resource-exhausted')) {
-        console.warn(`[Firestore Warning] Quota limit hit, falling back to memory execution (${err.message})`);
-      } else {
-        console.warn(`[Firestore] add error on ${this.pathSegments.join('/')}:`, err.message);
+      if (err.code === 8 || err.code === 'resource-exhausted' || err.message?.includes('RESOURCE_EXHAUSTED') || err.message?.includes('quota')) {
+        console.warn('[Firestore] Quota exceeded - proceeding in memory-only mode.');
+        return { id: `mem_${Date.now()}_${Math.random().toString(36).substring(2, 7)}` };
       }
+      console.warn(`[Firestore] add error on ${this.pathSegments.join('/')}:`, err.message);
       return { id: `mem_${Date.now()}_${Math.random().toString(36).substring(2, 7)}` };
     }
   }
@@ -172,11 +172,11 @@ class DocWrapper {
       const cleanedData = cleanDataForFirestore(data);
       return await setDoc(this.ref, cleanedData, { merge: options.merge ?? false });
     } catch (err) {
-      if (err.message && (err.message.includes('RESOURCE_EXHAUSTED') || err.message.includes('quota') || err.code === 'resource-exhausted')) {
-        console.warn(`[Firestore Warning] Quota limit hit, falling back to memory execution (${err.message})`);
-      } else {
-        console.warn(`[Firestore] set error on ${this.pathSegments.join('/')}:`, err.message);
+      if (err.code === 8 || err.code === 'resource-exhausted' || err.message?.includes('RESOURCE_EXHAUSTED') || err.message?.includes('quota')) {
+        console.warn('[Firestore] Quota exceeded - proceeding in memory-only mode.');
+        return null;
       }
+      console.warn(`[Firestore] set error on ${this.pathSegments.join('/')}:`, err.message);
       return null;
     }
   }
@@ -186,11 +186,11 @@ class DocWrapper {
       const cleanedData = cleanDataForFirestore(data);
       return await updateDoc(this.ref, cleanedData);
     } catch (err) {
-      if (err.message && (err.message.includes('RESOURCE_EXHAUSTED') || err.message.includes('quota') || err.code === 'resource-exhausted')) {
-        console.warn(`[Firestore Warning] Quota limit hit, falling back to memory execution (${err.message})`);
-      } else {
-        console.warn(`[Firestore] update error on ${this.pathSegments.join('/')}:`, err.message);
+      if (err.code === 8 || err.code === 'resource-exhausted' || err.message?.includes('RESOURCE_EXHAUSTED') || err.message?.includes('quota')) {
+        console.warn('[Firestore] Quota exceeded - proceeding in memory-only mode.');
+        return null;
       }
+      console.warn(`[Firestore] update error on ${this.pathSegments.join('/')}:`, err.message);
       return null;
     }
   }
@@ -199,11 +199,11 @@ class DocWrapper {
     try {
       return await deleteDoc(this.ref);
     } catch (err) {
-      if (err.message && (err.message.includes('RESOURCE_EXHAUSTED') || err.message.includes('quota') || err.code === 'resource-exhausted')) {
-        console.warn(`[Firestore Warning] Quota limit hit, falling back to memory execution (${err.message})`);
-      } else {
-        console.warn(`[Firestore] delete error on ${this.pathSegments.join('/')}:`, err.message);
+      if (err.code === 8 || err.code === 'resource-exhausted' || err.message?.includes('RESOURCE_EXHAUSTED') || err.message?.includes('quota')) {
+        console.warn('[Firestore] Quota exceeded - proceeding in memory-only mode.');
+        return null;
       }
+      console.warn(`[Firestore] delete error on ${this.pathSegments.join('/')}:`, err.message);
       return null;
     }
   }
@@ -231,8 +231,8 @@ class FirestoreWrapper {
               await setDoc(docRef, cleanDataForFirestore(data), { merge: options.merge ?? false });
             }
           } catch (e) {
-            if (e.message && (e.message.includes('RESOURCE_EXHAUSTED') || e.message.includes('quota') || e.code === 'resource-exhausted')) {
-              console.warn(`[Firestore Warning] Quota limit hit, falling back to memory execution (${e.message})`);
+            if (e.code === 8 || e.code === 'resource-exhausted' || e.message?.includes('RESOURCE_EXHAUSTED') || e.message?.includes('quota')) {
+              console.warn('[Firestore] Quota exceeded - proceeding in memory-only mode.');
             }
           }
         });
@@ -246,8 +246,8 @@ class FirestoreWrapper {
               await deleteDoc(docRef);
             }
           } catch (e) {
-            if (e.message && (e.message.includes('RESOURCE_EXHAUSTED') || e.message.includes('quota') || e.code === 'resource-exhausted')) {
-              console.warn(`[Firestore Warning] Quota limit hit, falling back to memory execution (${e.message})`);
+            if (e.code === 8 || e.code === 'resource-exhausted' || e.message?.includes('RESOURCE_EXHAUSTED') || e.message?.includes('quota')) {
+              console.warn('[Firestore] Quota exceeded - proceeding in memory-only mode.');
             }
           }
         });
