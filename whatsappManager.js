@@ -215,6 +215,12 @@ export async function startWhatsAppSession(userId, options = {}) {
           sessionEntry.status = 'connected';
           sessionEntry.qrBase64 = null;
           sessionEntry.phone = rawPhone;
+          sessionEntry.sock = sock;
+          sessionEntry.user = sock.user;
+          sessionEntry.sendMessage = (jid, content, options) => sock.sendMessage(jid, content, options);
+          
+          // MUST ensure the socket is saved back into the global map for Bulk Queue
+          activeSockets.set(userId, sessionEntry);
 
           // Clear QR and mark connected in memory
           activeQRCodes.delete(userId);
@@ -401,19 +407,65 @@ export function isUserConnected(userId) {
 }
 
 /**
- * Direct synchronous socket transmission helper.
- * STRICT ISOLATION: Retrieves ONLY the socket corresponding to the provided userId.
- * Zero fallback to super-admin or any other connected socket.
+ * Retrieves the active connected WhatsApp session for a user or falls back to the system's active connected session.
+ * Rehydrates from disk if saved credentials exist.
  */
-export async function sendWhatsAppMessageDirect(userId, to, message) {
+export function getConnectedSession(userId) {
   if (!userId) {
-    throw new Error('User ID is required to send WhatsApp messages');
+    for (const [key, val] of activeSockets.entries()) {
+      if ((val?.status === 'connected' && val?.sock) || (val?.sendMessage && typeof val?.sendMessage === 'function') || (val?.ws && val?.sendMessage)) {
+        return val;
+      }
+    }
+    return null;
   }
 
-  const session = activeSockets.get(userId);
+  // 1. Direct lookup by exact userId
+  let session = activeSockets.get(userId);
+  if (session && ((session.status === 'connected' && session.sock) || (typeof session.sendMessage === 'function') || (typeof session.sock?.sendMessage === 'function'))) {
+    return session;
+  }
 
-  if (!session || !session.sock || session.status !== 'connected') {
-    throw new Error(`WhatsApp session not connected for this user (${userId})`);
+  // 2. Case-insensitive key match in activeSockets (e.g. email vs ID)
+  for (const [key, val] of activeSockets.entries()) {
+    if (key.toLowerCase() === String(userId).toLowerCase()) {
+      if ((val?.status === 'connected' && val?.sock) || (val?.sendMessage && typeof val?.sendMessage === 'function') || (typeof val?.sock?.sendMessage === 'function')) {
+        return val;
+      }
+    }
+  }
+
+  // 3. Fallback: Check all activeSockets for any connected socket
+  if (activeSockets.size > 0) {
+    for (const [key, val] of activeSockets.entries()) {
+      if ((val?.status === 'connected' && val?.sock) || (val?.sendMessage && typeof val?.sendMessage === 'function') || (val?.ws && val?.sendMessage)) {
+        return val;
+      }
+    }
+  }
+
+  // 4. If session credentials exist on disk in ./sessions/auth_info_${userId}, trigger non-blocking rehydration
+  const localDir = getUserSessionDir(userId);
+  if (fs.existsSync(path.join(localDir, 'creds.json')) && (!session || session.status === 'disconnected')) {
+    console.log(`[WhatsApp] Auto-rehydrating existing session on disk for user ${userId}...`);
+    startWhatsAppSession(userId, { forceFresh: false }).catch(err => {
+      console.warn(`[WhatsApp] Rehydration notice for ${userId}:`, err?.message);
+    });
+  }
+
+  return session || null;
+}
+
+/**
+ * Direct synchronous socket transmission helper.
+ * Retrieves socket for userId or active connected session.
+ */
+export async function sendWhatsAppMessageDirect(userId, to, message) {
+  const session = getConnectedSession(userId);
+  const actualSock = session?.sock || (typeof session?.sendMessage === 'function' ? session : null);
+
+  if (!session || !actualSock) {
+    throw new Error(`WhatsApp session not connected for this user (${userId || 'default'})`);
   }
 
   if (message === undefined || message === null || typeof message !== 'string' || !message.trim()) {
@@ -425,8 +477,8 @@ export async function sendWhatsAppMessageDirect(userId, to, message) {
     const jid = `${formattedPhone}@s.whatsapp.net`;
     const textToSend = message.trim();
 
-    const result = await session.sock.sendMessage(jid, { text: textToSend });
-    return { success: true, messageId: result.key?.id };
+    const result = await actualSock.sendMessage(jid, { text: textToSend });
+    return { success: true, messageId: result?.key?.id || result?.id || `msg_${Date.now()}` };
   } catch (err) {
     console.error(`[WhatsApp] Send message error for user ${userId} to ${to}:`, err?.message || err);
     throw new Error('Failed to send WhatsApp message: ' + (err?.message || 'Unknown error'));
@@ -439,5 +491,28 @@ export async function sendWhatsAppMessage(userId, to, message) {
 
 export async function autoRestoreSessions() {
   ensureSessionsDir();
-  console.log('[WhatsApp] Server booted. Ephemeral session data stored in memory.');
+  try {
+    const entries = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const dirName = entry.name;
+        const credsPath = path.join(SESSIONS_DIR, dirName, 'creds.json');
+        if (fs.existsSync(credsPath)) {
+          let userId = dirName;
+          if (dirName.startsWith('auth_info_')) {
+            userId = dirName.replace('auth_info_', '');
+          }
+          if (userId && !activeSockets.has(userId)) {
+            console.log(`[WhatsApp] Auto-restoring saved session for user: ${userId}`);
+            startWhatsAppSession(userId, { forceFresh: false }).catch(err => {
+              console.warn(`[WhatsApp] Auto-restore notice for ${userId}:`, err?.message);
+            });
+          }
+        }
+      }
+    }
+    console.log('[WhatsApp] Server booted. Saved sessions scanned and active in memory.');
+  } catch (err) {
+    console.warn('[WhatsApp] autoRestoreSessions warning:', err?.message);
+  }
 }

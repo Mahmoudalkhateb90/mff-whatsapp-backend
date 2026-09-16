@@ -9,6 +9,7 @@ import { API_BASE_URL } from './config';
 import { Loader2 } from 'lucide-react';
 import { SessionProvider } from './context/SessionContext';
 import { LanguageProvider } from './context/LanguageContext';
+import { ToastProvider } from './context/ToastContext';
 
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
@@ -98,85 +99,87 @@ function PrivateRoute({
 export default function App() {
   return (
     <LanguageProvider>
-      <SessionProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<Login />} />
+      <ToastProvider>
+        <SessionProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              
+              {/* WhatsApp Session (QR Code) - All Roles */}
+              <Route 
+                path="/" 
+                element={
+                  <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}>
+                    <Dashboard />
+                  </PrivateRoute>
+                } 
+              />
             
-            {/* WhatsApp Session (QR Code) - All Roles */}
+              {/* Single Messaging - Enforces canSendSingle Permission */}
+              <Route 
+                path="/single" 
+                element={
+                  <PrivateRoute 
+                    allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}
+                    requiredPermission="canSendSingle"
+                  >
+                    <SingleMessage />
+                  </PrivateRoute>
+                } 
+              />
+              
+              {/* Bulk Broadcast Campaign - Enforces canSendBulk Permission */}
+              <Route 
+                path="/bulk" 
+                element={
+                  <PrivateRoute 
+                    allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}
+                    requiredPermission="canSendBulk"
+                  >
+                    <BulkBroadcast />
+                  </PrivateRoute>
+                } 
+              />
+            
+            {/* User Management - Super Admin Only */}
             <Route 
-              path="/" 
+              path="/admin/users" 
               element={
-                <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}>
-                  <Dashboard />
+                <PrivateRoute allowedRoles={['Super Admin']}>
+                  <AdminPanel />
                 </PrivateRoute>
               } 
             />
-          
-            {/* Single Messaging - Enforces canSendSingle Permission */}
             <Route 
-              path="/single" 
+              path="/users" 
               element={
-                <PrivateRoute 
-                  allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}
-                  requiredPermission="canSendSingle"
-                >
-                  <SingleMessage />
+                <PrivateRoute allowedRoles={['Super Admin']}>
+                  <AdminPanel />
                 </PrivateRoute>
               } 
             />
             
-            {/* Bulk Broadcast Campaign - Enforces canSendBulk Permission */}
+            {/* Team Reports & Audit Logs - Super Admin, Manager, Team Leader */}
             <Route 
-              path="/bulk" 
+              path="/reports" 
               element={
-                <PrivateRoute 
-                  allowedRoles={['Super Admin', 'Department Manager', 'Team Leader', 'Agent']}
-                  requiredPermission="canSendBulk"
-                >
-                  <BulkBroadcast />
+                <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
+                  <Reports />
                 </PrivateRoute>
               } 
             />
-          
-          {/* User Management - Super Admin Only */}
-          <Route 
-            path="/admin/users" 
-            element={
-              <PrivateRoute allowedRoles={['Super Admin']}>
-                <AdminPanel />
-              </PrivateRoute>
-            } 
-          />
-          <Route 
-            path="/users" 
-            element={
-              <PrivateRoute allowedRoles={['Super Admin']}>
-                <AdminPanel />
-              </PrivateRoute>
-            } 
-          />
-          
-          {/* Team Reports & Audit Logs - Super Admin, Manager, Team Leader */}
-          <Route 
-            path="/reports" 
-            element={
-              <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
-                <Reports />
-              </PrivateRoute>
-            } 
-          />
-          <Route 
-            path="/analytics" 
-            element={
-              <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
-                <Reports />
-              </PrivateRoute>
-            } 
-          />
-        </Routes>
-      </BrowserRouter>
-      </SessionProvider>
+            <Route 
+              path="/analytics" 
+              element={
+                <PrivateRoute allowedRoles={['Super Admin', 'Department Manager', 'Team Leader']}>
+                  <Reports />
+                </PrivateRoute>
+              } 
+            />
+          </Routes>
+        </BrowserRouter>
+        </SessionProvider>
+      </ToastProvider>
     </LanguageProvider>
   );
 }
